@@ -27,7 +27,15 @@ npm run build
 npm run preview
 ```
 
-预览默认地址为 <http://localhost:4173/>。`npm run build` 会先做 TypeScript 类型检查，再输出到 `dist/`。
+预览地址为 <http://localhost:4173/game/>。`npm run build` 会先做 TypeScript 类型检查，再输出到 `dist/`。
+
+## 在线试玩（GitHub Pages）
+
+在线地址：<https://jebrz.github.io/game/>
+
+推送到 `claude/serene-ritchie-qv18mk` 或 `main` 分支时，`.github/workflows/deploy.yml` 会自动构建并部署到 GitHub Pages。
+构建产物的基础路径是 `/game/`（见 `vite.config.ts`），本地 `npm run dev` 仍使用根路径。
+首次部署前需要在仓库 **Settings → Pages → Build and deployment → Source** 中选择 **GitHub Actions**。
 
 ## 操作方式
 
