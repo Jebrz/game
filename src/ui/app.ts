@@ -212,6 +212,7 @@ export class App {
     const partsLeft = s.train.driveRepaired ? 0 : TRAIN.driveRepairParts - s.train.driveRepair;
     const short = rawShortfall(s);
     const names = (m: Partial<Record<RawId, number>>) => Object.keys(m).map((k) => ITEM_INFO[k as RawId].label).join('、');
+    if (s.inventory.propellant < 10 && s.inventory.ice < 3) return '推进剂与冰晶都快耗尽：在「库存加工」用能源「应急合成推进剂」，让小组能飞去采冰，并提高冰晶需求奖励。';
     if (s.inventory.propellant < 20) return '运输机推进剂偏低：在「库存加工」用冰晶制推进剂，必要时提高冰晶需求奖励。';
     if (partsLeft > 0 && s.inventory.parts >= partsLeft) return '零件够了：到「列车」面板投入零件维修主驱动。';
     if (partsLeft > 0) {

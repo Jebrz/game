@@ -33,6 +33,8 @@ export const RECIPES: Recipe[] = [
   { id: 'trainFuel', label: '轨道燃料', inputs: { crystal: 3, ice: 1 }, outputs: { trainFuel: 1 }, time: 20, desc: '3 辉晶 + 1 冰晶 → 1 轨道燃料（列车用）' },
   { id: 'propellant', label: '运输机推进剂', inputs: { ice: 3 }, outputs: { propellant: 6 }, time: 10, desc: '3 冰晶 → 6 推进剂（运输机用）' },
   { id: 'oxygen', label: '电解制氧', inputs: { ice: 2 }, outputs: { oxygen: 60 }, time: 8, desc: '2 冰晶 → 60 m³ 氧气' },
+  // 保底：推进剂与冰晶同时耗尽时仍有出路（低效、耗能，不是免费资源）
+  { id: 'propellantEmergency', label: '应急合成推进剂', inputs: { energy: 60 }, outputs: { propellant: 6 }, time: 30, desc: '60 kWh 能源 → 6 推进剂（低效；冰晶耗尽、运输机无法出勤时使用）' },
 ];
 
 export interface ResearchProject {

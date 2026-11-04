@@ -294,7 +294,7 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
 
   if (!cands.length) {
     if (atTrain && fuelAvail < tank(sh) * 0.5 && rejected.some((r) => r.includes('油量'))) {
-      return { kind: 'mine', score: 0, why: '', extraCost: 0, dist: 0, blocked: `列车运输机推进剂不足（可用 ${fmt(fuelAvail, 1)}），无法到达任何目标` };
+      return { kind: 'mine', score: 0, why: '', extraCost: 0, dist: 0, blocked: `列车运输机推进剂不足（可用 ${fmt(fuelAvail, 1)}），无法到达任何目标${s.inventory.ice < 3 ? '；冰晶也已耗尽，可用能源应急合成推进剂' : '；可用冰晶制推进剂'}` };
     }
     if (rejected.length) g.reason = `无可行目标：${rejected.slice(0, 2).join('；')}`;
     else g.reason = s.planet!.signs.some((x) => x.revealed && !x.explored) ? '其他迹象已有小组在探索' : '没有已知的可采矿点或待探索迹象';

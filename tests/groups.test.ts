@@ -226,3 +226,30 @@ describe('目标判定', () => {
     expect(s.planet!.deliveries).toBe(s.stats.deliveries);
   });
 });
+
+describe('推进剂与冰晶同时耗尽', () => {
+  it('小组停飞时有可行出路：用能源应急合成推进剂后能再次出勤采冰（不是免费资源）', () => {
+    const s = createInitialState(2);
+    A.startGame(s);
+    A.startScan(s);
+    for (let i = 0; i < 300; i++) step(s);
+    waitHome(s);
+    s.inventory.propellant = 0;
+    s.inventory.ice = 0;
+    for (const sh of s.shuttles) sh.fuel = 0;
+    for (let i = 0; i < 60; i++) step(s);
+    const stuck = s.groups.filter((g) => g.state === 'grounded' && g.status.includes('推进剂不足'));
+    expect(stuck.length).toBeGreaterThan(0); // 其余小组可能在休整
+    expect(stuck[0].status).toContain('应急合成');
+    expect(A.canEnqueue(s, 'propellantEmergency', 1)).toBe('');
+    const e0 = s.inventory.energy;
+    A.enqueue(s, 'propellantEmergency', 2);
+    expect(s.inventory.energy).toBe(e0 - 120);
+    let flew = false;
+    for (let i = 0; i < 400 && !flew; i++) {
+      step(s);
+      flew = s.shuttles.some((x) => !x.docked);
+    }
+    expect(flew).toBe(true);
+  });
+});
