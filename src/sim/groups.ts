@@ -2,15 +2,15 @@
 // 规则：一人只承担一个主要岗位；负责人不进入出勤小组；列车保留基本运营人员。
 
 import { GROUPS, TRAIN_MIN_STAFF } from '../config/balance';
-import { PROFESSION_INFO } from '../config/content';
+import { GROUP_NAMES, PROFESSION_INFO } from '../config/content';
 import { log, person } from './core';
-import type { GameState, Group, Passenger, Profession } from './types';
+import type { GameState, Group, Passenger, Profession, Shuttle } from './types';
 
 export function requirementTotal(req: Partial<Record<Profession, number>>): number {
   return Object.values(req).reduce((a, b) => a + (b ?? 0), 0);
 }
 
-/** 可加入出勤小组的人：非列车长、非负责人、在车上、健康达标、不在恢复期、不在其他小组。 */
+/** 可加入出勤小组的人：非列车长、非负责人、在车上、健康与疲劳允许出勤、不在恢复期、不在其他小组。 */
 function freeCandidates(s: GameState, exclude: Set<number>): Passenger[] {
   return s.passengers.filter(
     (p) =>
@@ -20,15 +20,16 @@ function freeCandidates(s: GameState, exclude: Set<number>): Passenger[] {
       p.aboard &&
       p.groupId == null &&
       !exclude.has(p.id) &&
-      p.health >= GROUPS.minHealthToSortie,
+      p.health >= GROUPS.minHealthToSortie &&
+      p.fatigue <= GROUPS.restFatigue &&
+      p.recoveringUntil <= s.time,
   );
 }
 
-/** 计算列车必须保留的人员（按职业保留技能最高者）。 */
+/** 计算列车必须保留的人员（按职业保留：负责人优先，其次技能最高者）。 */
 export function reservedForTrain(s: GameState): Set<number> {
   const keep = new Set<number>();
   for (const [prof, n] of Object.entries(TRAIN_MIN_STAFF) as [Profession, number][]) {
-    // 负责人本身也算岗位人员
     const pool = s.passengers
       .filter((p) => !p.isCaptain && !p.leftBehind && p.profession === prof && p.groupId == null)
       .sort((a, b) => (a.headRole ? -1 : 0) - (b.headRole ? -1 : 0) || skillOf(b) - skillOf(a));
@@ -51,62 +52,183 @@ const PROF_SKILL: Partial<Record<Profession, keyof Passenger['skills']>> = {
   logistics: 'logistics',
 };
 
+function profSkill(p: Passenger, prof: Profession): number {
+  const sk = PROF_SKILL[prof];
+  return sk ? p.skills[sk] : 0;
+}
+
+function chooseLeader(s: GameState, g: Group): void {
+  const ms = g.memberIds.map((id) => person(s, id));
+  const leader = [...ms].sort((a, b) => b.skills.piloting + b.skills.survey * 0.5 - (a.skills.piloting + a.skills.survey * 0.5))[0];
+  g.leaderId = leader?.id ?? null;
+}
+
 /**
- * 重新编组所有在列车上待命的小组（出勤中的小组标记为返回后重组）。
- * 乘客自行组队：按职业技能择优，组长取驾驶或综合能力最高者。
+ * 按列车长规定的职业要求调整在列车上的小组（出勤中的小组返回后再调整）。
+ * 增量调整：保留现有成员，只释放超出要求的人、补充缺少的人；小组的贡献点、运输机、升级与历史不变。
+ * 人员不足时保留现有成员并显示缺口，不解散、不与其他组抢人。
  */
 export function reformGroups(s: GameState): void {
-  const reserved = reservedForTrain(s);
+  const req = s.groupRequirement;
+  const changes: string[] = [];
   for (const g of s.groups) {
-    if (!isHome(g)) {
+    if (!isHome(g) || g.state === 'unloading') {
       g.pendingReform = true;
       continue;
     }
-    disband(s, g);
-  }
-  for (const g of s.groups) {
-    if (!isHome(g) || g.memberIds.length) continue;
+    g.pendingReform = false;
+    const ms = g.memberIds.map((id) => person(s, id));
+    // 1) 释放超出要求（或不在要求中的职业）的成员：保留技能最高者
+    const released: string[] = [];
+    const keep: Passenger[] = [];
+    const byProf = new Map<Profession, Passenger[]>();
+    for (const p of ms) byProf.set(p.profession, [...(byProf.get(p.profession) ?? []), p]);
+    for (const [prof, list] of byProf) {
+      const n = req[prof] ?? 0;
+      const sorted = list.sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
+      keep.push(...sorted.slice(0, n));
+      for (const p of sorted.slice(n)) {
+        p.groupId = null;
+        released.push(p.name);
+      }
+    }
+    g.memberIds = keep.map((p) => p.id);
+    // 2) 补充缺少的成员（不占用列车必需岗位与其他组成员）
+    const reserved = reservedForTrain(s);
+    const added: string[] = [];
     const missing: string[] = [];
-    const picked: Passenger[] = [];
-    for (const [prof, need] of Object.entries(s.groupRequirement) as [Profession, number][]) {
+    for (const [prof, need] of Object.entries(req) as [Profession, number][]) {
       if (!need) continue;
-      const sk = PROF_SKILL[prof];
+      const have = keep.filter((p) => p.profession === prof).length;
+      if (have >= need) continue;
       const pool = freeCandidates(s, reserved)
-        .filter((p) => p.profession === prof && !picked.includes(p))
-        .sort((a, b) => (sk ? b.skills[sk] - a.skills[sk] : 0));
-      const got = pool.slice(0, need);
-      picked.push(...got);
-      if (got.length < need) missing.push(`${PROFESSION_INFO[prof].label} ×${need - got.length}`);
+        .filter((p) => p.profession === prof)
+        .sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
+      const got = pool.slice(0, need - have);
+      for (const p of got) {
+        p.groupId = g.id;
+        g.memberIds.push(p.id);
+        added.push(p.name);
+      }
+      if (have + got.length < need) missing.push(`${PROFESSION_INFO[prof].label} ×${need - have - got.length}`);
     }
     g.missing = missing;
+    chooseLeader(s, g);
+    if (released.length || added.length) changes.push(`${g.name}${added.length ? ` 加入 ${added.join('、')}` : ''}${released.length ? ` 离组 ${released.join('、')}` : ''}`);
     if (missing.length) {
-      // 不满足要求时不出勤，也不占用人员
-      g.memberIds = [];
-      g.leaderId = null;
       setState(s, g, 'grounded', `编组不足：缺少 ${missing.join('、')}`);
-      continue;
+      g.timer = 10;
+    } else if (g.state === 'grounded' && g.status.startsWith('编组')) {
+      setState(s, g, 'docked', '编组完成，待命');
+      g.timer = 1;
     }
-    for (const p of picked) p.groupId = g.id;
-    g.memberIds = picked.map((p) => p.id);
-    const leader = [...picked].sort(
-      (a, b) => b.skills.piloting + b.skills.survey * 0.5 - (a.skills.piloting + a.skills.survey * 0.5),
-    )[0];
-    g.leaderId = leader.id;
-    g.pendingReform = false;
-    setState(s, g, 'docked', '编组完成，待命');
   }
-  const names = s.groups.map((g) => `${g.name}${g.missing.length ? `（缺 ${g.missing.join('、')}）` : `（${g.memberIds.length}人）`}`);
-  log(s, 'group', `乘客自行编组：${names.join('，')}`);
+  const summary = s.groups.map((g) => `${g.name}${g.missing.length ? `（缺 ${g.missing.join('、')}）` : `（${g.memberIds.length}人）`}`);
+  log(s, 'group', `按职业要求调整编组：${changes.length ? changes.join('；') + '。' : '人员无变动。'}现状：${summary.join('，')}`);
+}
+
+// ---------------- 动态新增小组 ----------------
+
+export interface FormationCheck {
+  ok: boolean;
+  reasons: string[];
+  spare: Shuttle | null;
+  picked: Passenger[];
+  available: Partial<Record<Profession, number>>; // 可出勤的空闲人员（已扣除列车必需人手）
+  spares: number; // 可用于新组的公共备用机
+}
+
+/** 能否成立一个新小组（不改变状态） */
+export function checkNewGroup(s: GameState): FormationCheck {
+  const reasons: string[] = [];
+  const reserved = reservedForTrain(s);
+  const cands = freeCandidates(s, reserved);
+  const available: Partial<Record<Profession, number>> = {};
+  for (const p of cands) available[p.profession] = (available[p.profession] ?? 0) + 1;
+  // 可用的公共备用机：未被配属、未被预约、不属于任何小组出资、停在机库
+  const spares = s.shuttles.filter((x) => x.assignedTo === 'spare' && x.ownerGroupId == null && x.docked && !s.groups.some((g) => g.pendingSwap === x.id));
+  if (s.phase === 'intro' || s.phase === 'failed') reasons.push('游戏未进行');
+  if (!spares.length) reasons.push('缺运输机：没有可分配的公共备用机（列车长座机、小组私有备用机和已预约换装的运输机不会被占用）');
+  const needy = s.groups.filter((g) => g.memberIds.length && g.shuttleId == null);
+  if (spares.length && needy.length) reasons.push(`${needy.map((g) => g.name).join('、')}缺主运输机，公共备用机应先由列车长分配给它们`);
+  const picked: Passenger[] = [];
+  for (const [prof, need] of Object.entries(s.groupRequirement) as [Profession, number][]) {
+    if (!need) continue;
+    const pool = cands.filter((p) => p.profession === prof).sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
+    picked.push(...pool.slice(0, need));
+    if (pool.length < need) {
+      const minStaff = TRAIN_MIN_STAFF[prof] ?? 0;
+      const tired = s.passengers.filter((p) => !p.isCaptain && !p.headRole && !p.leftBehind && p.groupId == null && p.profession === prof && !cands.includes(p) && !reserved.has(p.id)).length;
+      reasons.push(
+        `缺${PROFESSION_INFO[prof].label} ×${need - pool.length}（空闲可出勤 ${pool.length}${minStaff ? `，需保留 ${minStaff} 名在列车运营` : ''}${tired ? `，另有 ${tired} 人因健康/疲劳/恢复暂不能出勤` : ''}）`,
+      );
+    }
+  }
+  if (requirementTotal(s.groupRequirement) < 2) reasons.push('职业要求过少');
+  return { ok: reasons.length === 0, reasons, spare: spares[0] ?? null, picked, available, spares: spares.length };
+}
+
+const EXTRA_NAMES = ['赤鸢组', '青岚组', '玄鹭组', '白鲸组', '苍狼组', '金蜂组'];
+
+function uniqueGroupName(s: GameState): string {
+  const used = new Set(s.groups.map((g) => g.name));
+  for (const n of [...GROUP_NAMES, ...EXTRA_NAMES]) if (!used.has(n)) return n;
+  let i = s.groups.length + 1;
+  while (used.has(`第${i}组`)) i++;
+  return `第${i}组`;
+}
+
+/** 满足条件时自动成立新小组：乘客自行组队、推选组长、领取公共备用机。不发放任何贡献点、燃料或材料。 */
+export function tryFormNewGroup(s: GameState): Group | null {
+  const c = checkNewGroup(s);
+  const text = c.ok ? '' : c.reasons.join('；');
+  if (s.formationNote !== text) {
+    // 原因变化时才记录，避免刷屏
+    if (text && s.shuttles.some((x) => x.assignedTo === 'spare' && x.ownerGroupId == null)) log(s, 'group', `暂无法成立新小组：${text}`);
+    s.formationNote = text;
+  }
+  if (!c.ok || !c.spare) return null;
+  const g: Group = {
+    id: s.nextId++,
+    name: uniqueGroupName(s),
+    leaderId: null,
+    memberIds: c.picked.map((p) => p.id),
+    shuttleId: c.spare.id,
+    points: 0,
+    pointsEarned: 0,
+    pointsSpent: 0,
+    state: 'docked',
+    stateSince: s.time,
+    timer: 2,
+    target: null,
+    status: '新组成立，待命',
+    reason: '',
+    decisions: [],
+    missing: [],
+    pendingReform: false,
+    recalled: false,
+    returnReason: '',
+    lastCargoFullRatio: 0,
+    trips: 0,
+    purchases: [],
+    loot: {},
+    lootResearch: 0,
+    pendingSwap: null,
+    exploreStreak: 0,
+  };
+  for (const p of c.picked) p.groupId = g.id;
+  c.spare.assignedTo = 'group';
+  s.groups.push(g);
+  chooseLeader(s, g);
+  const leader = person(s, g.leaderId!);
+  s.formationNote = '';
+  log(s, 'group', `新小组成立：${g.name}（${c.picked.map((p) => `${p.name}·${PROFESSION_INFO[p.profession].label}`).join('、')}），组长 ${leader.name}（${leader.personality === 'bold' ? '进取' : '稳健'}），领取公共备用机 ${c.spare.name}。贡献点从 0 开始。`);
+  s.toasts.push({ t: s.time, title: '新小组成立', text: `${g.name}领取 ${c.spare.name}，将自主出勤。` });
+  return g;
 }
 
 export function isHome(g: Group): boolean {
   return g.state === 'docked' || g.state === 'resting' || g.state === 'grounded';
-}
-
-function disband(s: GameState, g: Group): void {
-  for (const id of g.memberIds) person(s, id).groupId = null;
-  g.memberIds = [];
-  g.leaderId = null;
 }
 
 export function setState(s: GameState, g: Group, state: Group['state'], status: string, reason = ''): void {

@@ -6,6 +6,7 @@ import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INF
 import * as A from '../sim/actions';
 import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
 import { mineralStatus, nextLegFuel } from '../sim/objectives';
+import { checkNewGroup } from '../sim/groups';
 import { tradeText } from '../sim/natives';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
 import { clockText, fmt, fmtTime, groupShuttle, members } from '../sim/core';
@@ -122,7 +123,15 @@ function A_speed(s: GameState): number {
 
 // ---------------- 小组 ----------------
 function groupsPanel(s: GameState): string {
-  let h = `<h3>出勤小组编组要求</h3><div class="note">列车长规定职业人数；乘客按要求自行组队。负责人与列车必需岗位不参与出勤，一人只承担一个主要岗位。出勤中的小组将在返回后重组。</div>`;
+  const fc = checkNewGroup(s);
+  const profs0: Profession[] = ['pilot', 'surveyor', 'miner', 'engineer', 'medic'];
+  let h = `<h3>小组概况</h3><div>当前小组 <b>${s.groups.length}</b> 个 · 可分配的公共备用机 <b>${fc.spares}</b> 架</div>`;
+  h += `<div>空闲可出勤人员（已扣除列车必需人手）：${profs0.map((p) => `${PROFESSION_INFO[p].label} ${fc.available[p] ?? 0}`).join('、')}</div>`;
+  h += fc.ok
+    ? `<div class="ok">条件已满足：新小组将在 10 分钟内自动成立并领取公共备用机。</div>`
+    : `<div>新小组：<span class="why">暂无法成立——${esc(fc.reasons.join('；'))}</span></div>`;
+  h += `<div class="note">有公共备用机、且空闲乘客满足下方职业要求时，乘客会自动组成新组、推选组长并领取备用机，不需要审批。不会占用列车长座机、小组私有备用机或已预约换装的运输机；保留列车最低运营人手（工程 2、后勤 2、医疗 1）。新组贡献点从 0 开始。</div>`;
+  h += `<h3>出勤小组编组要求</h3><div class="note">列车长规定每组职业人数；所有小组按同一要求增量调整：只释放多出的人、补充缺少的人，小组的贡献点、运输机与历史不变。负责人与列车必需岗位不参与出勤，一人只属于一个小组。出勤中的小组返回后再调整。</div>`;
   const profs: Profession[] = ['pilot', 'surveyor', 'miner', 'engineer', 'medic'];
   h += `<table><tr><th>职业</th><th class="num">每组人数</th><th></th></tr>`;
   for (const p of profs) {
@@ -239,7 +248,7 @@ function shuttlesPanel(s: GameState): string {
     <li>每个小组只有一架主运输机。换机要求小组已返航、卸完货、不在卸货中；小组出勤时可「安排返航后换装」，该机为其保留。旧机转为备用（保留升级、耐久与燃料），不会销毁。</li>
     <li>小组出资的新机只由该组领取；列车长只能配属或分配列车公共运输机，不能征用小组出资的运输机。</li>
     <li>小组会在主运输机不可用、耐久低于 ${GROUP_ORDER.lowDurability} 或货舱长期装满时，用贡献点自主订购（每组同时一单）。</li>
-    <li>新小组：本阶段小组数量固定为 ${s.groups.length} 个，动态组建新组为后续内容；新机可用于换机、备用或配属列车长。</li>
+    <li>新小组：当前 ${s.groups.length} 个。有公共备用机且空闲人员满足职业要求时会自动成立新组（见「小组」面板的原因说明）；想把备用机留作换机，可先「安排返航后换装」保留它。</li>
     <li>列车长亲自驾驶探索为后续内容。</li></ul>`;
   h += `<h4>可购买升级（由小组用贡献点购买，并消耗列车库存）</h4><table><tr><th>升级</th><th>效果</th><th class="num">贡献点</th><th>库存消耗</th></tr>`;
   for (const up of SHUTTLE_UPGRADES) h += `<tr><td>${up.label}</td><td>${up.desc}</td><td class="num">${up.points}</td><td>${Object.entries(up.items).map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`).join('、')}</td></tr>`;

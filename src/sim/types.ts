@@ -105,6 +105,7 @@ export interface Group {
   loot: Partial<Record<ItemId, number>>; // 野外取得、待带回列车的物资
   lootResearch: number;
   pendingSwap: number | null; // 列车长安排的「返航卸货后换装」备用机 id
+  exploreStreak: number; // 连续探索、尚未带回原料的次数
 }
 
 export type ShuttleModel = 'hauler' | 'miner' | 'scout';
@@ -192,6 +193,7 @@ export interface PlanetState {
   hazardZones: { x: number; y: number; r: number }[];
   resourceProfile: ResourceProfile;
   natives: NativesState;
+  deliveries: number; // 在本星球完成的交付结算次数（真实结算记录）
   /** 本星球的灾变预警记录（每颗星球单独提示） */
   warned: boolean;
   edgeWarned: boolean;
@@ -345,4 +347,5 @@ export interface GameState {
   };
   failReason: string;
   edgePauseTriggered: boolean;
+  formationNote: string; // 最近一次「无法成立新组」的原因（只在变化时记录日志）
 }

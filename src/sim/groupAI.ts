@@ -8,6 +8,7 @@ import { findDeposit, freeSlots, heldSlot, releaseAllOf, reserveForDelivery, try
 import { clamp, dist, fmt, fmtTime, groupShuttle, log, members, rand } from './core';
 import { groupConsiderPurchases, settleCargo, unitPrice } from './economy';
 import { groupConsiderShuttle } from './hangar';
+import { rawShortfall } from './objectives';
 import { decide, isHome, leaderPersonality, reformGroups, setState } from './groups';
 import { cargoCap, cargoUsed, exploreTime, fuelPerKm, mineRate, speed, tank } from './shuttles';
 import type { Deposit, GameState, Group, RawId, Shuttle, Sign } from './types';
@@ -134,6 +135,7 @@ function depart(s: GameState, g: Group, sh: Shuttle, c: Choice): void {
   g.target = c.kind === 'explore' ? { kind: 'explore', signId: c.sign!.id } : { kind: 'mine', depositId: c.deposit!.id };
   if (c.kind === 'explore') {
     c.sign!.exploringGroupId = g.id;
+    g.exploreStreak += 1;
     setState(s, g, 'toExplore', `前往探索${c.sign!.label}`);
   } else {
     setState(s, g, 'toSite', `前往${c.deposit!.name}`);
@@ -152,6 +154,7 @@ interface Choice {
   extraCost: number;
   blocked: string;
   dist: number;
+  notes?: string[]; // 评分时得出的具体理由
 }
 
 /**
@@ -177,8 +180,20 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
     return need <= fuelAvail;
   };
   const riskPenalty = (h: number) => h * (bold ? 0.6 : 2.2);
+  const needs = trainNeeds(s);
+  // 某种资源是否已有可用的已知矿点（已发现、有储量、可进入、有空位或本组保留）
+  const knownAvail = (r: RawId): Deposit | undefined =>
+    P.deposits.find(
+      (d) =>
+        d.resource === r &&
+        d.discoveredBy != null &&
+        d.reserve > 0 &&
+        d.zone !== 'hostile' &&
+        !(d.zone === 'permit' && !P.natives.permitGranted) &&
+        (freeSlots(d) > 0 || heldSlot(d, g.id)),
+    );
 
-  // 探索候选
+  // 探索候选（价值 = 信息价值：已知同类可用矿点时大幅降低；列车需要且尚无已知矿点时提高）
   for (const sign of P.signs) {
     if (!sign.revealed || sign.explored) continue;
     if (sign.exploringGroupId != null && sign.exploringGroupId !== g.id) continue;
@@ -198,13 +213,40 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
       rejected.push(`${sign.label}往返 ${fmtTime(t)} 超过灾变安全时限`);
       continue;
     }
-    const expected = sign.kind === 'resource' ? 30 * unitPrice(s, sign.guess) + 25 : sign.kind === 'natives' ? 90 : 70; // 发现价值的粗略估计
-    let score = expected / t;
-    if (sh.model === 'scout') score *= 1.5;
-    if (bold) score *= 1.15;
+    const notes: string[] = [];
+    let info: number;
+    if (sign.kind === 'resource') {
+      const label = ITEM_INFO[sign.guess].label;
+      info = 30 + 15 * Math.min(5, unitPrice(s, sign.guess)); // 单价封顶，避免样本类迹象价值虚高
+      const known = knownAvail(sign.guess);
+      if (known) {
+        info *= 0.35;
+        notes.push(`已知${known.name}可采${label}，探索价值较低`);
+      } else if (needs.has(sign.guess)) {
+        info *= 1.4;
+        notes.push(`尚未发现可用的${label}矿点，而列车需要${label}（${needs.get(sign.guess)}）`);
+      } else notes.push(`尚未发现可用的${label}矿点`);
+    } else if (sign.kind === 'natives') {
+      info = 90;
+      notes.push('人工信号可能是原住民聚落');
+    } else {
+      info = 80;
+      notes.push('异常信号可能有遗留物资');
+    }
+    if (fuelLow) {
+      info *= 0.6;
+      notes.push('推进剂紧张，探索带不回原料');
+    }
+    if (g.exploreStreak >= 2) {
+      info *= Math.pow(0.6, g.exploreStreak - 1);
+      notes.push(`已连续探索 ${g.exploreStreak} 处未带回原料`);
+    }
+    let score = info / t;
+    if (sh.model === 'scout') score *= 1.3;
+    score *= bold ? 1.15 : 0.9;
     score *= 1 - riskPenalty(sign.hazard) * 0.5;
     const extra = atTrain ? extraCost(s, dist(P.trainX, P.trainY, sign.x, sign.y)) : 0;
-    cands.push({ kind: 'explore', sign, score, why: '', extraCost: extra, blocked: '', dist: d });
+    cands.push({ kind: 'explore', sign, score, why: '', extraCost: extra, blocked: '', dist: d, notes });
   }
 
   // 采矿候选
@@ -241,8 +283,13 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
     if (!own && avail <= 0) score *= 0.35; // 可能需要等待位置
     if (own) score *= 1.2; // 已保留的位置
     if (fuelLow && dep.resource === 'ice') score *= 2.5; // 推进剂告急关系到本组能否出勤
+    const notes: string[] = [];
+    if (needs.has(dep.resource) && !(fuelLow && dep.resource === 'ice')) {
+      score *= 1.25;
+      notes.push(`列车短缺${ITEM_INFO[dep.resource].label}（${needs.get(dep.resource)}）`);
+    }
     const extra = atTrain ? extraCost(s, dist(P.trainX, P.trainY, dep.x, dep.y)) : 0;
-    cands.push({ kind: 'mine', deposit: dep, score, why: '', extraCost: extra, blocked: '', dist: d });
+    cands.push({ kind: 'mine', deposit: dep, score, why: '', extraCost: extra, blocked: '', dist: d, notes });
   }
 
   if (!cands.length) {
@@ -266,6 +313,16 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   return best;
 }
 
+/** 列车当前短缺的原料及用途（维修零件 / 轨道燃料 / 推进剂） */
+function trainNeeds(s: GameState): Map<RawId, string> {
+  const m = new Map<RawId, string>();
+  const short = rawShortfall(s);
+  for (const k of Object.keys(short.parts) as RawId[]) m.set(k, '维修零件');
+  for (const k of Object.keys(short.fuel) as RawId[]) m.set(k, m.has(k) ? `${m.get(k)}、轨道燃料` : '轨道燃料');
+  if (s.inventory.propellant < PROPELLANT_ALERT && !m.has('ice')) m.set('ice', '运输机推进剂');
+  return m;
+}
+
 function extraCost(s: GameState, d: number): number {
   const over = d - s.policies.basicRadius;
   return over > 0 ? Math.ceil(over * 1.5) : 0;
@@ -275,12 +332,17 @@ function explain(s: GameState, g: Group, sh: Shuttle, c: Choice, all: Choice[], 
   const bits: string[] = [];
   if (c.kind === 'explore') {
     bits.push(`前往探索${c.sign!.label}`);
+    bits.push(...(c.notes ?? []));
+    const mine = all.find((o) => o.kind === 'mine');
+    if (mine) bits.push(`预期价值高于采集${mine.deposit!.name}`);
     if (sh.model === 'scout') bits.push('探索型运输机适合勘察');
     if (c.sign!.hazard > 0.12) bits.push(bold ? '组长进取，接受该区域风险' : '风险可控');
   } else {
     const d = c.deposit!;
     const r = d.resource;
     bits.push(`前往${d.name}采集${ITEM_INFO[r].label}`);
+    bits.push(...(c.notes ?? []));
+    if (all.some((o) => o.kind === 'explore')) bits.push('已知矿点收益高于继续探索');
     if (s.demandBonus[r] > 0) bits.push(`响应列车需求奖励（${unitPrice(s, r)} 点/单位）`);
     if (r === 'ice' && s.inventory.propellant < PROPELLANT_ALERT) bits.push('列车推进剂告急，关系本组能否出勤，优先采冰晶');
     const richer = all.find((o) => o !== c && o.kind === 'mine' && o.deposit!.resource !== r && o.dist > c.dist + 8);
@@ -501,9 +563,10 @@ function reconsiderInField(s: GameState, g: Group, sh: Shuttle, why: string, exc
   g.target = c.kind === 'explore' ? { kind: 'explore', signId: c.sign!.id } : { kind: 'mine', depositId: c.deposit!.id };
   if (c.kind === 'explore') {
     c.sign!.exploringGroupId = g.id;
+    g.exploreStreak += 1;
     setState(s, g, 'toExplore', `前往探索${c.sign!.label}`);
   } else setState(s, g, 'toSite', `前往${c.deposit!.name}`);
-  decide(s, g, `${why}，重新评估：${c.why}`);
+  decide(s, g, `${why} → 下一步：${c.why}`);
 }
 
 function startReturn(s: GameState, g: Group, sh: Shuttle, why: string): void {

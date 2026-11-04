@@ -140,7 +140,7 @@ export const ROSTER: RosterEntry[] = [
   { name: '小满', profession: 'general', skills: { logistics: 25 }, compatibility: 65 },
 ];
 
-export const GROUP_NAMES = ['灰隼组', '长明组', '第三组'];
+export const GROUP_NAMES = ['灰隼组', '长明组'];
 
 export interface SignTemplate {
   label: string;

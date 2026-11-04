@@ -44,7 +44,8 @@ export class App {
   mouse: { x: number; y: number } | null = null;
   hoverCar: string | null = null;
   cache: Record<string, string> = {};
-  objCollapsed = false;
+  objCollapsed = window.innerHeight < 720; // 矮窗口默认收起目标框，避免遮挡地图
+  logMin = false;
   storage: Storage | null;
 
   constructor() {
@@ -240,7 +241,7 @@ export class App {
       ['station', '交易站'],
     ];
     const lines = this.s.log.filter((l) => this.logFilter === 'all' || l.cat === this.logFilter).slice(-80).reverse();
-    return `<div class="filters"><span>事件记录</span>${cats.map(([k, v]) => sbtn(v, 'logFilter', k, '', this.logFilter === k ? 'on' : '')).join('')}</div><div class="lines">${lines
+    return `<div class="filters"><span>事件记录</span>${sbtn(this.logMin ? '展开' : '收起', 'logToggle')}${cats.map(([k, v]) => sbtn(v, 'logFilter', k, '', this.logFilter === k ? 'on' : '')).join('')}</div><div class="lines">${lines
       .map((l) => `<div class="c-${l.cat}"><span class="t">${clockText(l.t)}</span>${esc(l.text)}</div>`)
       .join('')}</div>`;
   }
@@ -327,6 +328,10 @@ export class App {
         break;
       case 'objToggle':
         this.objCollapsed = !this.objCollapsed;
+        break;
+      case 'logToggle':
+        this.logMin = !this.logMin;
+        $('app').classList.toggle('log-min', this.logMin);
         break;
       case 'logFilter':
         this.logFilter = arg;

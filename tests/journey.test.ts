@@ -342,7 +342,7 @@ describe('旧存档迁移（v2 单星球 → v3）', () => {
     const s = started(2);
     for (let i = 0; i < 300; i++) step(s);
     const loaded = deserialize(toLegacy(s, 2, 960));
-    expect(loaded.version).toBe(3);
+    expect(loaded.version).toBe(4);
     expect(loaded.journey.nodes.map((n) => n.kind)).toEqual(['planet', 'station']);
     expect(Math.abs(minutesUntil(loaded.catastrophe.front, loaded.time, 0) - (960 - s.time))).toBeLessThan(1);
     expect(loaded.inventory).toEqual(s.inventory); // 不重复发资源

@@ -38,7 +38,6 @@ export function planetObjectives(s: GameState): Objective[] {
   const P = s.planet;
   if (s.phase !== 'planet' || !P) return [];
   const first = s.journey.current === 0;
-  const found = P.deposits.filter((d) => d.discoveredBy != null).length;
   const explored = P.signs.filter((x) => x.explored).length;
   const outside = s.groups.filter((g) => !['docked', 'resting', 'grounded'].includes(g.state)).length;
   const need = nextLegFuel(s);
@@ -48,9 +47,12 @@ export function planetObjectives(s: GameState): Objective[] {
   ];
   if (first) {
     out.push(
-      { id: 'deliver', label: '收到首批原料', done: s.stats.deliveries > 0 || found === 0, detail: `交付 ${s.stats.deliveries} 次` },
+      { id: 'deliver', label: '收到首批原料', done: P.deliveries > 0, detail: `本星交付 ${P.deliveries} 次（只计实际返航结算）` },
       { id: 'repair', label: '加工维修零件并修复主驱动', done: s.train.driveRepaired, detail: s.train.driveRepairTimer > 0 ? '维修中' : `零件 ${fmt(s.inventory.parts)}/${TRAIN.driveRepairParts - s.train.driveRepair}${shortText(s, rawShortfall(s).parts)}` },
     );
+  }
+  if (!first && P.deposits.some((d) => d.discoveredBy != null && d.zone !== 'hostile')) {
+    out.push({ id: 'deliver', label: '本星首批原料交付', done: P.deliveries > 0, detail: `本星交付 ${P.deliveries} 次`, optional: true });
   }
   if (P.natives.kind === 'friendly' && P.natives.detected) out.push({ id: 'natives', label: `与${P.natives.name}建立联系`, done: P.natives.contacted, detail: '小组调查「人工信号」后可交易、协商采矿许可（「航线」面板）', optional: true });
   if (P.natives.kind === 'hostile' && P.natives.detected) out.push({ id: 'hostile', label: '避开敌对禁区', done: true, detail: `${P.natives.name}拒绝接近，禁区内矿点不可作业`, optional: true });
@@ -69,6 +71,7 @@ export function journeyObjectives(s: GameState): Objective[] {
   const passed = planets.filter((n) => n.status === 'visited' || n.status === 'skipped').length;
   return [
     { id: 'drive', label: '修复主驱动（一次性）', done: s.train.driveRepaired, detail: '' },
+    { id: 'deliveries', label: '全程原料交付', done: s.stats.deliveries > 0, detail: `全程 ${s.stats.deliveries} 次，各星：${nodes.filter((n) => n.kind === 'planet').map((n) => `${n.name.slice(0, 2)} ${(n.planet ?? (n.status === 'current' ? s.planet : null))?.deliveries ?? 0}`).join('、')}` },
     { id: 'growth', label: '小组完成升级或基因强化', done: s.stats.upgrades + s.stats.genes > 0, detail: `升级 ${s.stats.upgrades} · 强化 ${s.stats.genes}` },
     { id: 'route', label: `沿航线经过 ${planets.length} 颗星球（可跳过）`, done: passed >= planets.length, detail: `${nodes.map((n) => `${n.name}${n.status === 'current' ? '◀' : n.status === 'visited' ? '✔' : n.status === 'skipped' ? '↷' : ''}`).join(' → ')}` },
     { id: 'station', label: '抵达交易站并补给或维修', done: stageComplete(s), detail: s.station.docked ? '「交易站」面板' : s.phase === 'travel' && s.travel ? `航行 ${s.travel.progress}/${s.travel.duration} 分` : '' },

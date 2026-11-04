@@ -1,8 +1,16 @@
 // 测试辅助：把当前状态还原成旧版本存档的数据形状（v1 / v2），用于验证迁移。
 import type { GameState } from '../src/sim/types';
 
-export function toLegacy(s: GameState, version: 1 | 2, trueArrival = 960): string {
+export function toLegacy(s: GameState, version: 1 | 2 | 3, trueArrival = 960): string {
   const o = JSON.parse(JSON.stringify(s));
+  // v4 新增：按星球交付计数、小组连续探索计数、新组提示
+  delete o.formationNote;
+  for (const g of o.groups) delete g.exploreStreak;
+  for (const P of [o.planet, ...o.journey.nodes.map((n: { planet: unknown }) => n.planet)]) if (P) delete (P as Record<string, unknown>).deliveries;
+  if (version === 3) {
+    o.version = 3;
+    return JSON.stringify({ version: 3, savedAt: '', gameTime: s.time, state: o });
+  }
   // v3 新增：航线、灾变前锋、星球画像/原住民、迹象与矿点扩展字段、小组遗留物资、研究储备
   const P = o.planet ?? o.journey.nodes[o.journey.current].planet;
   delete o.journey;

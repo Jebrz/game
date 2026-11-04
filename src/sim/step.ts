@@ -4,6 +4,7 @@ import { STATION } from '../config/balance';
 import { tickCatastrophe } from './catastrophe';
 import { tickClaims } from './claims';
 import { tickJourney } from './journey';
+import { tryFormNewGroup } from './groups';
 import { tickGroups } from './groupAI';
 import { tickMoodHourly, tickPeopleHourly, tickResources } from './survival';
 import { tickDriveRepair, tickProcessing, tickResearch, tickScan } from './train';
@@ -29,6 +30,8 @@ export function step(s: GameState): void {
     tickStation(s);
     tickGroups(s);
   }
+  // 每 10 分钟检查是否能自动成立新小组（需有公共备用机与足够的空闲合格人员）
+  if (s.time % 10 === 0) tryFormNewGroup(s);
   if (s.time % 60 === 0) {
     tickPeopleHourly(s);
     tickMoodHourly(s);

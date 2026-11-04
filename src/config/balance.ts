@@ -3,7 +3,7 @@
 
 import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
 
-export const SAVE_VERSION = 3; // v3：多星球航线与灾变前锋；v2 运输机制造与机库（旧存档读取时自动升级）
+export const SAVE_VERSION = 4; // v4：动态小组；v3：多星球航线与灾变前锋；v2：运输机制造与机库（旧存档读取时自动升级）
 
 export const TIME = {
   minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟

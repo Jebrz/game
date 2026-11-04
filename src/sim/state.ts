@@ -48,6 +48,7 @@ export function createInitialState(seed = 20261104): GameState {
     stats: { deliveries: 0, rawDelivered: {}, upgrades: 0, genes: 0, leftBehind: 0, departedAt: -1 },
     failReason: '',
     edgePauseTriggered: false,
+    formationNote: '',
   };
   s.catastrophe.bias = (rand(s) * 2 - 1) * CATASTROPHE.biasRange;
 
@@ -95,6 +96,7 @@ export function createInitialState(seed = 20261104): GameState {
       loot: {},
       lootResearch: 0,
       pendingSwap: null,
+      exploreStreak: 0,
     });
   }
   const route = generateRoute(s);

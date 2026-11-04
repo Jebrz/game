@@ -21,10 +21,11 @@ export function serialize(s: GameState): string {
 export function deserialize(json: string): GameState {
   const f = JSON.parse(json) as SaveFile;
   if (!f || typeof f !== 'object' || !f.state) throw new Error('存档格式无效');
-  if (![1, 2, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
+  if (![1, 2, 3, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
   let s = f.state;
   if (f.version === 1) s = migrateV1(s);
   if (f.version <= 2) s = migrateV2(s);
+  if (f.version <= 3) s = migrateV3(s);
   s.paused = true; // 读档后暂停，便于确认状态
   return s;
 }
@@ -100,6 +101,7 @@ export function migrateV2(old: GameState): GameState {
     P.natives = P.natives ?? { kind: 'none', name: '', x: 0, y: 0, r: 0, detected: false, contacted: false, permitGranted: false, permitCost: {}, trades: [] };
     P.warned = P.warned ?? !!oc.warned;
     P.edgeWarned = P.edgeWarned ?? !!oc.edgeWarned;
+    P.deliveries = P.deliveries ?? s.stats.deliveries; // 旧航程只有一颗星球
     for (const sg of P.signs) {
       sg.kind = sg.kind ?? 'resource';
       sg.restricted = sg.restricted ?? false;
@@ -113,8 +115,10 @@ export function migrateV2(old: GameState): GameState {
     g.loot = g.loot ?? {};
     g.lootResearch = g.lootResearch ?? 0;
     g.pendingSwap = g.pendingSwap ?? null;
+    g.exploreStreak = g.exploreStreak ?? 0;
   }
   s.research.bank = s.research.bank ?? 0;
+  s.formationNote = s.formationNote ?? '';
   const onPlanet = s.phase === 'planet' || s.phase === 'intro' || s.phase === 'failed';
   const planetNode = {
     id: s.nextId++,
@@ -167,4 +171,23 @@ export function migrateV2(old: GameState): GameState {
 function smoothFrac(t: number): number {
   const x = Math.max(0, Math.min(1, t / CATASTROPHE.rampMinutes));
   return 3 * x * x - 2 * x * x * x;
+}
+
+/**
+ * v3 → v4：动态小组与按星球统计交付。
+ * - 补齐小组的连续探索计数、新组提示字段。
+ * - 旧存档没有按星球记录交付次数：已有交付全部计在起始星球（旧版本只有起始星球能够产生大量交付的近似），其余星球记 0。
+ */
+export function migrateV3(old: GameState): GameState {
+  const s = old as GameState & Record<string, unknown>;
+  for (const g of s.groups) g.exploreStreak = g.exploreStreak ?? 0;
+  s.formationNote = s.formationNote ?? '';
+  const planets = [s.planet, ...s.journey.nodes.map((n) => n.planet)].filter((p): p is NonNullable<typeof p> => !!p);
+  for (const p of planets) {
+    if (p.deliveries === undefined) p.deliveries = 0;
+  }
+  const first = s.journey.current === 0 && s.planet ? s.planet : s.journey.nodes[0].planet;
+  if (first && first.deliveries === 0 && s.stats.deliveries > 0 && planets.every((p) => p.deliveries === 0)) first.deliveries = s.stats.deliveries;
+  s.version = 4;
+  return s;
 }

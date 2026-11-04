@@ -12,7 +12,7 @@ export const RES_COLOR: Record<RawId, string> = {
   crystal: '#c49bff',
   bio: '#9be36b',
 };
-const GROUP_COLOR = ['#ffcc55', '#ff7ad9', '#7af0ff'];
+const GROUP_COLOR = ['#ffcc55', '#ff7ad9', '#7af0ff', '#9dff7a', '#ffa07a', '#c7a0ff'];
 
 export interface MapHit {
   x: number;
@@ -234,7 +234,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     else if (g.target?.kind === 'explore') tgt = P.signs.find((z) => z.id === g.target!.signId) ?? null;
     else if (g.target?.kind === 'mine') tgt = P.deposits.find((z) => z.id === g.target!.depositId) ?? null;
     if (tgt) {
-      ctx.strokeStyle = GROUP_COLOR[gi];
+      ctx.strokeStyle = GROUP_COLOR[gi % GROUP_COLOR.length];
       ctx.globalAlpha = 0.5;
       ctx.setLineDash([3, 5]);
       ctx.beginPath();
@@ -248,7 +248,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang);
-    ctx.fillStyle = GROUP_COLOR[gi];
+    ctx.fillStyle = GROUP_COLOR[gi % GROUP_COLOR.length];
     ctx.beginPath();
     ctx.moveTo(9, 0);
     ctx.lineTo(-6, -6);
@@ -257,7 +257,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.closePath();
     ctx.fill();
     ctx.restore();
-    ctx.fillStyle = GROUP_COLOR[gi];
+    ctx.fillStyle = GROUP_COLOR[gi % GROUP_COLOR.length];
     ctx.font = '11px sans-serif';
     ctx.fillText(g.name, x + 8, y - 8);
     hits.push({

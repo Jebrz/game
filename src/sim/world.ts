@@ -69,6 +69,7 @@ export function buildPlanet(s: GameState, name: string, profile: ResourceProfile
     natives,
     warned: false,
     edgeWarned: false,
+    deliveries: 0,
   };
   for (const tpl of specs) {
     const ang = ((tpl.angle + (rand(s) - 0.5) * 16) * Math.PI) / 180;

@@ -30,6 +30,7 @@ export function settleCargo(s: GameState, g: Group, sh: Shuttle): number {
     parts.push(`${ITEM_INFO[r].label} ${fmt(q)}`);
   }
   batch.settled = true;
+  if (points > 0) g.exploreStreak = 0;
   sh.cargo = { id: newId(s), items: {}, settled: false };
   if (points > 0) {
     points = Math.round(points * 10) / 10;
@@ -37,6 +38,7 @@ export function settleCargo(s: GameState, g: Group, sh: Shuttle): number {
     g.pointsEarned += points;
     s.pointsIssued += points;
     s.stats.deliveries++;
+    if (s.planet) s.planet.deliveries++;
     log(s, 'economy', `${g.name}交付 ${parts.join('、')}，获得贡献点 ${fmt(points, 1)}（批次 #${batch.id}）`);
   }
   return points;
