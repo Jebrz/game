@@ -73,8 +73,15 @@ export function autoPlayer(s: GameState, opts: BotOpts = {}): void {
     }
     // 原住民
     if (P.natives.kind === 'friendly' && P.natives.contacted) {
-      if (!novice && !A.canPermit(s)) A.grantPermit(s);
+      if (!s.research.current && !s.research.done.includes('translation') && !A.canResearch(s, 'translation')) A.startResearch(s, 'translation');
+      if (!novice) for (const d of P.deposits.filter((x) => x.zone === 'permit' && x.discoveredBy != null)) if (!A.canNegotiate(s, d, 'share')) A.negotiate(s, d.id, 'share');
       if (s.inventory.trainFuel + queued('trainFuel') < need && !A.canTrade(s, 'fuel')) A.trade(s, 'fuel');
+    }
+    // 事件：expert 选投入较大的方案（可负担时），novice 选省事的方案；原住民矿区选分享产出，不可协商时拒绝
+    for (const ev of s.events.filter((e) => e.status === 'pending' && e.nodeIndex === s.journey.current)) {
+      const prefs = ev.kind === 'facility' ? (novice ? ['salvage'] : ['repair', 'salvage']) : ev.kind === 'beacon' ? (novice ? ['record'] : ['deep', 'record']) : ['share', 'decline'];
+      const pick = prefs.find((o) => !A.canChoose(s, ev, o));
+      if (pick) A.chooseEvent(s, ev.id, pick);
     }
     // 离站：逼近预警（或燃料与目标完成后）时召回，然后前往下一站（expert 会跳过已知无矿的星球）
     const st = stage(s);

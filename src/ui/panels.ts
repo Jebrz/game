@@ -1,15 +1,16 @@
 // 侧边详细面板（每个标签一个函数，返回 HTML）
 
-import { DEMAND_BONUS, GENE, GROUP_ORDER, GROUPS, ROBOTS, ROUTE, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
+import { DEMAND_BONUS, EVENT_DEFS, GENE, GROUP_ORDER, GROUPS, RELATION, ROBOTS, ROUTE, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
 import { canExpandHangar, canOrderShuttle, hangarUsage, itemListText, jobLabel, jobSource, nextExpansion, QUEUE_MAX, refundText } from '../sim/hangar';
 import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INFO, RAW_IDS, RECIPES, RESEARCH } from '../config/content';
 import * as A from '../sim/actions';
 import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
 import { mineralStatus, nextLegFuel } from '../sim/objectives';
 import { checkNewGroup } from '../sim/groups';
-import { tradeText } from '../sim/natives';
+import { activePermit, ATTITUDE_LABEL, attitude, depositAccess, hasTranslation, permitTerms, tradeText } from '../sim/natives';
+import { DEFER_TEXT, eventOptions, optionSummary } from '../sim/events';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
-import { clockText, fmt, fmtTime, groupShuttle, members } from '../sim/core';
+import { clockText, costText, fmt, fmtTime, groupShuttle, members } from '../sim/core';
 import { geneEligibility, geneTrainBlock, purchaseOptions, unitPrice } from '../sim/economy';
 import { recallInfo } from '../sim/groupAI';
 import { leaderPersonality } from '../sim/groups';
@@ -20,11 +21,12 @@ import { recipeOutputs } from '../sim/train';
 import type { GameState, ItemId, Passenger, Profession, RawId, Shuttle, TrainDept } from '../sim/types';
 import { bar, btn, esc, sbtn } from './html';
 
-export type TabId = 'train' | 'route' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
+export type TabId = 'train' | 'route' | 'events' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: 'train', label: '列车' },
   { id: 'route', label: '航线' },
+  { id: 'events', label: '事件' },
   { id: 'groups', label: '小组' },
   { id: 'shuttles', label: '运输机' },
   { id: 'industry', label: '库存加工' },
@@ -45,6 +47,8 @@ export function renderPanel(s: GameState, tab: TabId): string {
       return trainPanel(s);
     case 'route':
       return routePanel(s);
+    case 'events':
+      return eventsPanel(s);
     case 'groups':
       return groupsPanel(s);
     case 'shuttles':
@@ -421,6 +425,8 @@ function recallPanel(s: GameState): string {
       outside += r.outside.length;
       h += `<tr><td>${esc(g.name)}</td><td>${esc(r.where)}${r.outside.length ? `<br><span class="why">未归：${esc(r.outside.join('、'))}</span>` : ''}</td><td class="num">${r.eta ? fmtTime(r.eta) : '已归'}</td><td class="num">${fmt(r.cargo)}</td><td class="num">${fmt(r.fuel, 1)}</td></tr>`;
     }
+    const evs = s.events.filter((e) => e.nodeIndex === s.journey.current && (e.status === 'active' || e.status === 'assigned'));
+    if (evs.length) h += `<tr><td colspan="5" class="note">执行中的事件：${evs.map((e) => `${esc(e.title)}（${EV_STATUS[e.status]}，剩余 ${fmtTime(e.remaining)}）`).join('；')}。召回会中断作业：进度保留，已投入不退；离站则作废。</td></tr>`;
     h += `</table><div>${outside ? `<span class="badtext">尚有 ${outside} 人未返回</span>` : '<span class="ok">所有人员都在列车上</span>'}</div>`;
     h += `<h4>作业位置保留</h4><div class="note">返航交货期间保留 ${SLOT_RESERVE_MINUTES} 分钟，过期释放。</div>`;
     const held = (s.planet?.deposits ?? []).flatMap((d) => d.slots.filter((x) => x.status !== 'free').map((x) => ({ d, x })));
@@ -433,6 +439,97 @@ function recallPanel(s: GameState): string {
   return h;
 }
 
+
+
+const EV_STATUS: Record<string, string> = { pending: '待决定', assigned: '待执行', active: '作业中', done: '已完成', declined: '已放弃/拒绝', expired: '已作废' };
+
+function nativesHtml(s: GameState): string {
+  const P = s.planet!;
+  const N = P.natives;
+  const att = attitude(N);
+  let h = `<div><b>${esc(N.name)}</b> · 态度：<b>${ATTITUDE_LABEL[att]}</b>${N.contacted ? ` · 关系 ${N.relation}` : ''}</div>`;
+  if (!N.contacted) return h + `<div class="note">尚未接触：小组调查地图上的「人工信号」后建立联系。领地内的矿点在取得许可前不会被小组作业。</div>`;
+  h += `<div class="note">关系只因具体行为变化：初次接触 +${RELATION.contact}、公平交易 +${RELATION.trade}、按约支付许可 +${RELATION.permitPaid}、按约分享产出每次 +${RELATION.shareStep}（累计至多 +${RELATION.shareMax}）。关系 ≥ ${RELATION.cooperativeAt} 为合作（许可更便宜），≤ ${RELATION.waryAt} 为警惕（拒绝新协议与交易）。</div>`;
+  if (N.relationLog.length) h += `<div class="note">最近变化：${N.relationLog.slice(0, 4).map((l) => `${l.delta > 0 ? '+' : ''}${l.delta} ${esc(l.reason)}`).join('；')}</div>`;
+  h += hasTranslation(s) ? `<div class="ok">已掌握基础图形语言翻译：可以协商采矿许可。</div>` : `<div class="why">尚无翻译能力：只能以物易物。研究「基础图形语言翻译」（研究基因面板，10 研究点）后可协商采矿许可。</div>`;
+  h += `<h4>物资交易（以物易物）</h4><table>${N.trades
+    .map((t) => {
+      const w = A.canTrade(s, t.id);
+      return `<tr><td>${esc(tradeText(t))}</td><td class="num">剩 ${t.stock}</td><td>${sbtn('交易', 'trade', t.id, w)}${w ? `<br><span class="why">${esc(w)}</span>` : ''}</td></tr>`;
+    })
+    .join('')}</table>`;
+  h += `<h4>领地矿点与采矿许可</h4>`;
+  const deps = P.deposits.filter((d) => d.zone === 'permit');
+  if (!deps.some((d) => d.discoveredBy != null)) h += `<div class="note">领地内尚未确认矿点。</div>`;
+  for (const d of deps.filter((x) => x.discoveredBy != null)) {
+    const pm = activePermit(s, d);
+    const pay = permitTerms(s, 'pay');
+    const share = permitTerms(s, 'share');
+    h += `<div class="card"><div class="head"><b>${esc(d.name)}</b><span>${ITEM_INFO[d.resource].label} 储量 ${fmt(d.reserve)}</span></div>`;
+    if (N.permitGranted) h += `<div class="ok">旧存档的整片领地许可仍有效。</div>`;
+    else if (pm) h += `<div class="ok">许可有效：${pm.kind === 'pay' ? '已支付' : `分享产出 ${Math.round(pm.sharePct * 100)}%`}，剩余 ${fmtTime(pm.expiresAt - s.time)}，已开采 ${fmt(pm.extracted)}/${pm.cap}</div>`;
+    else {
+      const w1 = A.canNegotiate(s, d, 'pay');
+      const w2 = A.canNegotiate(s, d, 'share');
+      h += `<div class="why">${esc(depositAccess(s, d))}</div>`;
+      h += `<div class="row">${sbtn(`支付 ${costText(pay.cost)}（${fmtTime(pay.duration)}，上限 ${pay.cap}）`, 'negotiate', `${d.id}:pay`, w1)}</div>${w1 ? `<div class="why">${esc(w1)}</div>` : ''}`;
+      h += `<div class="row">${sbtn(`分享产出 ${Math.round(share.pct * 100)}%（${fmtTime(share.duration)}，上限 ${share.cap}）`, 'negotiate', `${d.id}:share`, w2)}</div>${w2 ? `<div class="why">${esc(w2)}</div>` : ''}`;
+      h += `<div class="note">分享产出：该矿点每批货物的 ${Math.round(share.pct * 100)}% 在卸货时交给原住民，不进列车库存，小组只按留存部分计贡献点。</div>`;
+    }
+    h += `</div>`;
+  }
+  return h;
+}
+
+function eventsPanel(s: GameState): string {
+  const here = s.events.filter((e) => e.nodeIndex === s.journey.current);
+  const open = here.filter((e) => ['pending', 'assigned', 'active'].includes(e.status));
+  let h = `<h3>探索事件</h3><div class="note">普通探索由小组自主进行；只有需要投入、外交或有风险的地点会提交给你决定。发现事件时模拟会暂停一次。<br>规则：选择时立即扣除投入；由小组到现场作业，完成后带着成果返航入库（只发一次）。召回或灾变迫近会中断作业：保留剩余进度，已投入不退。开始作业前取消可原样退还。离开星球时未完成的事件作废。${esc(DEFER_TEXT)}</div>`;
+  if (!open.length) h += `<div class="note">当前星球没有待处理的事件。</div>`;
+  for (const ev of open) {
+    const finder = s.groups.find((g) => g.id === ev.finderGroupId);
+    const exec = s.groups.find((g) => g.id === ev.assignedGroupId);
+    h += `<div class="card"><div class="head"><b>${esc(ev.title)}</b><span>${EV_STATUS[ev.status]}</span></div>`;
+    h += `<div class="note">${esc(ev.planetName)} · ${finder ? `${esc(finder.name)}于 ${clockText(ev.discoveredAt)} 发现` : '列车侦测'}${ev.kind !== 'nativeMine' ? ` · ${esc(EVENT_DEFS[ev.kind].desc)}` : ''}</div>`;
+    if (ev.status === 'pending') {
+      if (ev.kind === 'nativeMine') {
+        const dep = s.planet?.deposits.find((d) => d.id === ev.siteId);
+        if (dep) {
+          const pay = permitTerms(s, 'pay');
+          const share = permitTerms(s, 'share');
+          h += `<div>${esc(EVENT_DEFS.nativeMine.desc)} ${esc(dep.name)}（${ITEM_INFO[dep.resource].label}，${dep.slots.length} 个作业位置）。</div>`;
+          const opts: [string, string, string][] = [
+            ['pay', `支付许可：${costText(pay.cost)}`, `有效 ${fmtTime(pay.duration)}，最多开采 ${pay.cap} 单位；关系 +${RELATION.permitPaid}`],
+            ['share', `分享产出 ${Math.round(share.pct * 100)}%`, `无预付；有效 ${fmtTime(share.duration)}，最多开采 ${share.cap} 单位；每批货 ${Math.round(share.pct * 100)}% 交给原住民，贡献点按留存部分计算`],
+            ['decline', '拒绝并离开', '该矿点保持禁止作业；可之后在「航线」面板重新协商'],
+          ];
+          for (const [id, label, desc] of opts) {
+            const w = A.canChoose(s, ev, id);
+            h += `<div class="row">${sbtn(label, 'evChoose', `${ev.id}:${id}`, w, id === 'decline' ? '' : 'primary')}<span class="note">${esc(desc)}</span></div>${w ? `<div class="why">${esc(w)}</div>` : ''}`;
+          }
+        }
+      } else {
+        for (const o of eventOptions(ev)) {
+          const w = A.canChoose(s, ev, o.id);
+          h += `<div class="row">${sbtn(o.label, 'evChoose', `${ev.id}:${o.id}`, w, 'primary')}<span class="note">${esc(o.desc)}</span></div><div class="note">${esc(optionSummary(ev, o))}；执行：${esc((s.groups.find((g) => g.id === ev.finderGroupId) ?? s.groups[0])?.name ?? '—')}</div>${w ? `<div class="why">${esc(w)}</div>` : ''}`;
+        }
+        h += `<div class="row">${sbtn('放弃', 'evDecline', ev.id)}<span class="note">不再处理该地点（一次性）</span></div>`;
+      }
+      h += `<div class="note">稍后处理：直接关闭本面板即可，事件保留在此列表。</div>`;
+    } else {
+      const opt = eventOptions(ev).find((o) => o.id === ev.choice);
+      h += `<div>方案：${esc(opt?.label ?? ev.choice ?? '')} · 执行：${esc(exec?.name ?? '—')}（${esc(exec?.status ?? '')}）</div>`;
+      h += `<div>进度：${fmtTime(ev.work - ev.remaining)}/${fmtTime(ev.work)}${bar(1 - ev.remaining / Math.max(1, ev.work), 'warm')}</div>`;
+      if (Object.keys(ev.paid).length) h += `<div class="note">已投入：${esc(costText(ev.paid))}</div>`;
+      const cw = A.canCancel(ev);
+      h += `<div class="row">${sbtn('取消执行（退还投入）', 'evCancel', ev.id, cw)}${cw ? `<span class="why">${esc(cw)}</span>` : ''}</div>`;
+    }
+    h += `</div>`;
+  }
+  const hist = s.events.filter((e) => !['pending', 'assigned', 'active'].includes(e.status));
+  if (hist.length) h += `<h4>事件记录</h4><ul class="plain">${hist.map((e) => `<li>${esc(e.planetName)} · ${esc(e.title)}：${EV_STATUS[e.status]}。${esc(e.result)}</li>`).join('')}</ul>`;
+  return h;
+}
 
 // ---------------- 航线与星球 ----------------
 const PROFILE_TEXT: Record<string, string> = { rich: '资源较丰富', poor: '资源较少/偏科', barren: '几乎无矿产' };
@@ -459,18 +556,18 @@ function routePanel(s: GameState): string {
     else if (N.kind === 'none') h += `<div>未发现原住民。</div>`;
     else if (N.kind === 'hostile') h += `<div class="badtext">${esc(N.name)}：明确拒绝接近。禁区（地图紫色区域）内的迹象与矿点不可进入或作业，小组会绕开；靠近禁区边缘作业可能收到驱逐警告。</div><div class="note">本阶段不实现战斗；可以绕开禁区，或提前离开。</div>`;
     else {
-      h += `<div><b>${esc(N.name)}</b>：${N.contacted ? '<span class="ok">已建立联系</span>' : '尚未接触（小组调查地图上的「人工信号」后建立联系）'}</div>`;
-      if (N.contacted) {
-        h += `<h4>物资交易</h4><table>${N.trades
-          .map((t) => {
-            const w = A.canTrade(s, t.id);
-            return `<tr><td>${esc(tradeText(t))}</td><td class="num">剩 ${t.stock}</td><td>${sbtn('交易', 'trade', t.id, w)}${w ? `<br><span class="why">${esc(w)}</span>` : ''}</td></tr>`;
-          })
-          .join('')}</table>`;
-        const pw = A.canPermit(s);
-        h += `<h4>采矿许可</h4><div>领地内矿点：${P.deposits.filter((d) => d.zone === 'permit').map((d) => esc(d.name) + (d.discoveredBy != null ? '' : '（未确认）')).join('、') || '无'}</div>`;
-        h += N.permitGranted ? `<div class="ok">已取得许可，小组可前往领地内矿点作业。</div>` : `<div class="row">${sbtn(`协商采矿许可（${Object.entries(N.permitCost).map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`).join('、')}）`, 'permit', '', pw)}${pw ? `<span class="why">${esc(pw)}</span>` : ''}</div>`;
-      }
+      h += nativesHtml(s);
+    }
+    // 非采矿价值（无矿星或遗迹）
+    const ruins = P.signs.filter((x) => x.kind === 'ruin');
+    if (P.scanned && ruins.length) {
+      h += `<h4>非采矿价值</h4><ul class="plain">${ruins
+        .map((x) => {
+          const ev = s.events.find((e) => e.siteId === x.id && e.nodeIndex === j.current);
+          const st = !x.explored ? '未调查（可能有遗留物资、设施或资料）' : ev ? `事件：${ev.title}（${EV_STATUS[ev.status]}）` : x.lootTaken ? '已取得遗留物资' : esc(x.resultText || '已调查');
+          return `<li>${esc(x.label)}：${st}</li>`;
+        })
+        .join('')}</ul>`;
     }
     // 出发选项
     h += `<h3>下一站</h3>`;

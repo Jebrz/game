@@ -337,7 +337,7 @@ describe('存档', () => {
     s.inventory.ice = 6;
     A.enqueue(s, 'propellant', 2);
     const loaded = deserialize(toLegacy(s, 1));
-    expect(loaded.version).toBe(4);
+    expect(loaded.version).toBe(5);
     expect(loaded.hangar.capacity).toBeGreaterThanOrEqual(loaded.shuttles.length);
     expect(loaded.shuttles.map((x) => x.serial)).toEqual(['TJ-01', 'TJ-02']);
     expect(loaded.shuttles.every((x) => x.ownerGroupId === null)).toBe(true);

@@ -4,6 +4,7 @@ import { ITEM_INFO } from '../config/content';
 import { fmt, fmtTime } from '../sim/core';
 import { cargoCap, cargoUsed } from '../sim/shuttles';
 import type { GameState, RawId } from '../sim/types';
+import { activePermit, ATTITUDE_LABEL, attitude, depositAccess } from '../sim/natives';
 
 export const RES_COLOR: Record<RawId, string> = {
   iron: '#d86a4a',
@@ -120,7 +121,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.fillStyle = hostile ? '#d8b0ff' : '#a8f0c8';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(hostile ? `⛔ ${N.name}禁区` : `${N.name}领地${N.permitGranted ? '（已许可）' : N.contacted ? '（需许可）' : ''}`, X(N.x), Y(N.y) + N.r * sc + 14);
+    ctx.fillText(hostile ? `⛔ ${N.name}禁区` : `${N.name}领地（${ATTITUDE_LABEL[attitude(N)]}，矿点需许可）`, X(N.x), Y(N.y) + N.r * sc + 14);
     ctx.textAlign = 'left';
     hits.push({
       x: X(N.x),
@@ -128,7 +129,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
       r: N.r * sc,
       html: hostile
         ? `<b>${N.name}禁区</b><br>拒绝接近。区内迹象与矿点不可进入或作业，小组会绕开。本阶段不实现战斗。`
-        : `<b>${N.name}领地</b><br>${N.contacted ? `已建立联系。${N.permitGranted ? '已取得采矿许可。' : '领地内矿点需要协商采矿许可（「航线」面板）。'}` : '尚未接触：派小组调查「人工信号」可建立联系。'}`,
+        : `<b>${N.name}领地</b>（${ATTITUDE_LABEL[attitude(N)]}${N.contacted ? `，关系 ${N.relation}` : ''}）<br>${N.contacted ? '领地内矿点需要按矿点协商采矿许可（「航线」面板）；小组不会无许可进入。' : '尚未接触：派小组调查「人工信号」可建立联系。'}`,
     });
   }
   // 迹象（资源 / 遗迹 / 原住民信号）
@@ -190,7 +191,8 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     });
     ctx.fillStyle = '#e8eefc';
     ctx.font = '11px sans-serif';
-    ctx.fillText(`${d.name} ${fmt(d.reserve)}${d.zone === 'hostile' ? '（禁区）' : d.zone === 'permit' && !P.natives.permitGranted ? '（需许可）' : ''}`, x + 11, y + 4);
+    const pm = d.zone === 'permit' ? activePermit(s, d) : null;
+    ctx.fillText(`${d.name} ${fmt(d.reserve)}${d.zone === 'hostile' ? '（禁区）' : d.zone === 'permit' ? (pm || P.natives.permitGranted ? `（许可中${pm ? ` 剩${fmtTime(pm.expiresAt - s.time)}` : ''}）` : '（需许可）') : ''}`, x + 11, y + 4);
     const slotTxt = d.slots
       .map((sl, i) => {
         const g = s.groups.find((x) => x.id === sl.holderGroupId);
@@ -201,8 +203,25 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
       x,
       y,
       r: 12,
-      html: `<b>${d.name}</b>（${ITEM_INFO[d.resource].label}）${d.zone === 'hostile' ? '<br><span class="badtext">敌对禁区内，不可作业</span>' : d.zone === 'permit' && !P.natives.permitGranted ? `<br><span class="why">${P.natives.name}领地内，需要采矿许可</span>` : ''}<br>储量 ${fmt(d.reserve)}/${d.initialReserve}${empty ? ' <span class="badtext">已采空</span>' : ''}${d.hazard >= 0.15 ? '<br><span class="badtext">风险区：可能落石</span>' : ''}<br>${slotTxt}`,
+      html: `<b>${d.name}</b>（${ITEM_INFO[d.resource].label}）${d.zone === 'hostile' ? '<br><span class="badtext">敌对禁区内，不可作业</span>' : d.zone !== 'permit' ? '' : pm ? `<br><span class="ok">许可有效：剩余 ${fmtTime(pm.expiresAt - s.time)}，已采 ${fmt(pm.extracted)}/${pm.cap}${pm.kind === 'share' ? `，分享 ${Math.round(pm.sharePct * 100)}%` : ''}</span>` : `<br><span class="why">${depositAccess(s, d)}</span>`}<br>储量 ${fmt(d.reserve)}/${d.initialReserve}${empty ? ' <span class="badtext">已采空</span>' : ''}${d.hazard >= 0.15 ? '<br><span class="badtext">风险区：可能落石</span>' : ''}<br>${slotTxt}`,
     });
+  }
+  // 事件地点
+  for (const ev of s.events.filter((e) => e.nodeIndex === s.journey.current)) {
+    const x = X(ev.x);
+    const y = Y(ev.y);
+    const col = ev.status === 'pending' ? '#ffd166' : ev.status === 'assigned' || ev.status === 'active' ? '#5cc8ff' : '#777';
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(x, y - 16, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(ev.status === 'pending' ? '!' : ev.status === 'assigned' || ev.status === 'active' ? '⚙' : '✓', x, y - 12);
+    ctx.textAlign = 'left';
+    const ST: Record<string, string> = { pending: '待决定', assigned: '待执行', active: '作业中', done: '已完成', declined: '已放弃', expired: '已作废' };
+    hits.push({ x, y: y - 16, r: 10, html: `<b>事件：${ev.title}</b><br>${ST[ev.status]}${ev.status === 'active' || ev.status === 'assigned' ? `，剩余作业 ${fmtTime(ev.remaining)}` : ''}<br><span class="note">${ev.result || '详见「事件」面板'}</span>` });
   }
   // 列车
   const tx = X(P.trainX);

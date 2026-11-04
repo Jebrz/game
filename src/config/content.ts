@@ -34,7 +34,7 @@ export const RECIPES: Recipe[] = [
   { id: 'propellant', label: '运输机推进剂', inputs: { ice: 3 }, outputs: { propellant: 6 }, time: 10, desc: '3 冰晶 → 6 推进剂（运输机用）' },
   { id: 'oxygen', label: '电解制氧', inputs: { ice: 2 }, outputs: { oxygen: 60 }, time: 8, desc: '2 冰晶 → 60 m³ 氧气' },
   // 保底：推进剂与冰晶同时耗尽时仍有出路（低效、耗能，不是免费资源）
-  { id: 'propellantEmergency', label: '应急合成推进剂', inputs: { energy: 60 }, outputs: { propellant: 6 }, time: 30, desc: '60 kWh 能源 → 6 推进剂（低效；冰晶耗尽、运输机无法出勤时使用）' },
+  { id: 'propellantEmergency', label: '应急合成推进剂', inputs: { energy: 90 }, outputs: { propellant: 6 }, time: 40, desc: '90 kWh 能源 → 6 推进剂（低效；冰晶耗尽、运输机无法出勤时使用）' },
 ];
 
 export interface ResearchProject {
@@ -48,6 +48,7 @@ export interface ResearchProject {
 export const RESEARCH: ResearchProject[] = [
   { id: 'geneMining', label: '采掘适应序列解析', cost: 24, items: { bio: 1 }, desc: '解锁基因强化「采掘适应序列·一阶」' },
   { id: 'propellantRefine', label: '推进剂提纯工艺', cost: 16, items: { ice: 6 }, desc: '推进剂配方产出 +2' },
+  { id: 'translation', label: '基础图形语言翻译', cost: 10, items: {}, desc: '解锁与原住民协商采矿许可（未翻译时只能以物易物）' },
 ];
 
 // 尚未实现的远期内容，仅作展示，不可操作
@@ -147,6 +148,8 @@ export const GROUP_NAMES = ['灰隼组', '长明组'];
 export interface SignTemplate {
   label: string;
   guess: RawId;
+  kind?: 'resource' | 'ruin' | 'natives';
+  eventKind?: 'facility' | 'beacon';
   dist: number;
   angle: number; // 度
   hazard: number;
@@ -169,6 +172,8 @@ export const PLANET_TEMPLATE = {
     { label: '生物迹象', guess: 'bio', dist: 33, angle: 250, hazard: 0.1, deposits: [{ resource: 'bio', name: '岩缝孢子群落', reserve: 10, slots: 1 }], eventId: 'beacon' },
     { label: '辉晶迹象', guess: 'crystal', dist: 50, angle: 110, hazard: 0.15, deposits: [{ resource: 'crystal', name: '远岭辉晶脉', reserve: 160, slots: 1 }, { resource: 'copper', name: '远岭铜矿', reserve: 100, slots: 1 }] },
     { label: '铁矿迹象', guess: 'iron', dist: 46, angle: 280, hazard: 0.1, deposits: [{ resource: 'iron', name: '黑砂铁滩', reserve: 200, slots: 1 }] },
+    // 可选事件：废弃设施（教学星球安全，不影响维修与燃料）
+    { label: '设施信号', guess: 'iron', kind: 'ruin', dist: 27, angle: 170, hazard: 0, deposits: [], eventKind: 'facility', emptyText: '一座旧时代的轨道维护站。' },
   ] as SignTemplate[],
 };
 

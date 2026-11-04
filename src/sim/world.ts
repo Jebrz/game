@@ -5,7 +5,7 @@
 // - 保底：每颗后续星球都至少有一种可获得「下一段航程燃料」的途径（敌对禁区外的辉晶+冰晶、遗留燃料舱或可交流原住民），
 //   且不需要先去下一颗星球才能取得当前起飞燃料。
 
-import { ROUTE } from '../config/balance';
+import { EVENT_DEFS, ROUTE } from '../config/balance';
 import { PLANET_TEMPLATE } from '../config/content';
 import { rand } from './core';
 import type { Deposit, GameState, ItemId, NativeKind, NativesState, PlanetState, RawId, ResourceProfile, RouteNode, Sign } from './types';
@@ -31,6 +31,7 @@ export interface SignSpec {
   loot?: Partial<Record<ItemId, number>>;
   research?: number;
   restricted?: boolean; // 指定位于敌对禁区
+  eventKind?: 'facility' | 'beacon'; // 发现时生成需要决策的事件
 }
 
 const W = 140;
@@ -48,8 +49,18 @@ function between(s: GameState, lo: number, hi: number): number {
   return lo + rand(s) * (hi - lo);
 }
 
-function emptyNatives(): NativesState {
-  return { kind: 'none', name: '', x: 0, y: 0, r: 0, detected: false, contacted: false, permitGranted: false, permitCost: {}, trades: [] };
+export function emptyNatives(): NativesState {
+  return { kind: 'none', name: '', x: 0, y: 0, r: 0, detected: false, contacted: false, permitGranted: false, permitCost: {}, trades: [], relation: 0, relationLog: [], permits: [], sharePaid: 0 };
+}
+
+/** 事件结果在生成地点时预先掷定（读档、重复发现都不会改变） */
+function rollEvent(s: GameState, kind: 'facility' | 'beacon'): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const o of EVENT_DEFS[kind].options) {
+    for (const [k, [lo, hi]] of Object.entries(o.reward) as [string, [number, number]][]) out[`${o.id}.${k}`] = lo + Math.floor(rand(s) * (hi - lo + 1));
+    if (o.research) out[`${o.id}.research`] = o.research[0] + Math.floor(rand(s) * (o.research[1] - o.research[0] + 1));
+  }
+  return out;
 }
 
 /** 按规格构建一颗星球的地图 */
@@ -96,6 +107,10 @@ export function buildPlanet(s: GameState, name: string, profile: ResourceProfile
       research: tpl.research ?? 0,
       lootTaken: false,
     };
+    if (tpl.eventKind) {
+      sign.eventKind = tpl.eventKind;
+      sign.eventRolls = rollEvent(s, tpl.eventKind);
+    }
     p.signs.push(sign);
     if (tpl.hazard >= 0.15) p.hazardZones.push({ x, y, r: 9 });
     tpl.deposits.forEach((dt, i) => {
@@ -212,10 +227,17 @@ function randomPlanet(s: GameState, name: string, profile: ResourceProfile, nk: 
     variant = '无矿';
     specs.push(
       { label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(16, 26), angle: freeAngle(), hazard: 0, deposits: [], loot: { trainFuel: nextFuel, parts: 2 }, emptyText: '一座被遗弃的轨道补给站，燃料舱与零件箱仍可使用。' },
-      { label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(24, 36), angle: freeAngle(), hazard: 0.05, deposits: [], research: 10, emptyText: '古代观测站的数据核心，记录了灰烬潮的早期观测。' },
-      { label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(30, 42), angle: freeAngle(), hazard: 0, deposits: [], emptyText: '只有风化的残骸，没有可用之物。' },
+      { label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(24, 36), angle: freeAngle(), hazard: 0.05, deposits: [], eventKind: 'beacon', emptyText: '古代观测站的信标，仍在发送编码信号。' },
+      rand(s) < 0.5
+        ? { label: '设施信号', guess: 'iron', kind: 'ruin', dist: r(30, 42), angle: freeAngle(), hazard: 0, deposits: [], eventKind: 'facility', emptyText: '一座半埋的维护站。' }
+        : { label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(30, 42), angle: freeAngle(), hazard: 0, deposits: [], emptyText: '只有风化的残骸，没有可用之物。' },
       { label: '铁矿迹象', guess: 'iron', dist: r(20, 34), angle: freeAngle(), hazard: 0, deposits: [], emptyText: '金属反射来自地表碎屑，确认无可采矿产。' },
     );
+  }
+  // 可选探索事件（不影响燃料保底）
+  if (profile !== 'barren') {
+    if (rand(s) < 0.55) specs.push({ label: '设施信号', guess: 'iron', kind: 'ruin', dist: r(24, 40), angle: freeAngle(), hazard: 0, deposits: [], eventKind: 'facility', emptyText: '一座旧时代的轨道维护站。' });
+    if (rand(s) < 0.4) specs.push({ label: '异常信号', guess: 'iron', kind: 'ruin', dist: r(28, 44), angle: freeAngle(), hazard: 0.05, deposits: [], eventKind: 'beacon', emptyText: '一座仍在运转的信标。' });
   }
   // 原住民相关迹象
   if (nk === 'friendly') {

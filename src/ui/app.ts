@@ -46,11 +46,12 @@ export class App {
   cache: Record<string, string> = {};
   objCollapsed = window.innerHeight < 720; // 矮窗口默认收起目标框，避免遮挡地图
   logMin = false;
+  seenPending = 0;
   storage: Storage | null;
 
   constructor() {
     this.storage = safeStorage();
-    this.s = createInitialState(Math.floor(Math.random() * 1e9));
+    this.s = createInitialState(pickSeed());
     this.seenToasts = this.s.toasts.length;
     this.bind();
     this.showIntro();
@@ -90,6 +91,13 @@ export class App {
       this.toast(t.title, t.text, /灾变|危险|失败/.test(t.title));
     }
     if (s.phase === 'failed' && !this.modalOpen()) this.showFailed();
+    // 新的待决事件：切到「事件」面板（多个事件进入同一待办列表，不叠加弹窗）
+    const pend = s.events.filter((e) => e.status === 'pending').length;
+    if (pend > this.seenPending) {
+      this.tab = 'events';
+      this.cache = {};
+    }
+    this.seenPending = pend;
   }
 
   // ---------------- 绘制 ----------------
@@ -179,6 +187,7 @@ export class App {
       let alert = false;
       if (t.id === 'recall') alert = s.phase === 'planet' && ['warn', 'edge', 'impact'].includes(stage(s));
       if (t.id === 'station') alert = s.station.docked && !A.stageComplete(s);
+      if (t.id === 'events') alert = s.events.some((e) => e.status === 'pending' && e.nodeIndex === s.journey.current);
       return sbtn(t.label, 'tab', t.id, '', `${this.tab === t.id ? 'on' : ''} ${alert ? 'alert' : ''}`);
     }).join('');
   }
@@ -207,6 +216,8 @@ export class App {
     const st = stage(s);
     if (st === 'edge' || st === 'impact') return s.recallActive ? '等待小组归队后，到「航线」面板离站。' : '危险！到「灾变召回」发出紧急召回令。';
     if (!P?.scanned) return P && P.scanProgress >= 0 ? '扫描进行中，可以先浏览各面板。' : '提示：到「列车」面板启动扫描（或点击车头）。空格键暂停，1-4 切换速度。';
+    if (s.events.some((e) => e.status === 'pending' && e.nodeIndex === s.journey.current)) return '有待决定的探索事件：查看「事件」面板，选择方案或稍后处理。';
+    if (P.natives.kind === 'friendly' && P.natives.contacted && !P.natives.permits.length && !s.research.done.includes('translation')) return `已与${P.natives.name}建立联系：可以先以物易物；研究「基础图形语言翻译」后才能协商领地采矿许可。`;
     if (P.natives.kind === 'friendly' && P.natives.contacted && !P.natives.permitGranted && P.deposits.some((d) => d.zone === 'permit' && d.discoveredBy != null)) return `已与${P.natives.name}建立联系：可在「航线」面板交易物资或协商领地采矿许可。`;
     if (!s.stats.deliveries) return '小组会自主探索迹象、确认矿点并采矿。切到「星球地图」(M) 观察他们。';
     const partsLeft = s.train.driveRepaired ? 0 : TRAIN.driveRepairParts - s.train.driveRepair;
@@ -349,8 +360,17 @@ export class App {
       case 'trade':
         A.trade(s, arg);
         break;
-      case 'permit':
-        A.grantPermit(s);
+      case 'negotiate':
+        A.negotiate(s, Number(a), b as 'pay' | 'share');
+        break;
+      case 'evChoose':
+        A.chooseEvent(s, Number(a), b);
+        break;
+      case 'evDecline':
+        A.declineEvent(s, Number(arg));
+        break;
+      case 'evCancel':
+        A.cancelEventExec(s, Number(arg));
         break;
       case 'depart':
         A.depart(s);
@@ -436,7 +456,7 @@ export class App {
         this.load(arg as SlotId);
         break;
       case 'newGame':
-        this.s = createInitialState(Math.floor(Math.random() * 1e9));
+        this.s = createInitialState(pickSeed());
         this.resetUiState();
         this.showIntro();
         break;
@@ -455,6 +475,7 @@ export class App {
   resetUiState(): void {
     this.clock = { acc: 0 };
     this.seenToasts = this.s.toasts.length;
+    this.seenPending = this.s.events.filter((e) => e.status === 'pending').length;
     this.lastAutosave = this.s.time;
     this.lastPhase = this.s.phase;
     this.cache = {};
@@ -556,4 +577,15 @@ function safeStorage(): Storage | null {
   } catch {
     return null;
   }
+}
+
+/** 新开局种子：默认随机；地址带 ?seed=数字 时使用指定种子（用于复现与测试，不影响正常游玩） */
+function pickSeed(): number {
+  try {
+    const v = new URLSearchParams(location.search).get('seed');
+    if (v && /^\d+$/.test(v)) return Number(v);
+  } catch {
+    /* 忽略 */
+  }
+  return Math.floor(Math.random() * 1e9);
 }

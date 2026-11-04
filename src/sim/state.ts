@@ -49,6 +49,7 @@ export function createInitialState(seed = 20261104): GameState {
     failReason: '',
     edgePauseTriggered: false,
     formationNote: '',
+    events: [],
   };
   s.catastrophe.bias = (rand(s) * 2 - 1) * CATASTROPHE.biasRange;
 
@@ -163,7 +164,7 @@ export function makeShuttle(s: GameState, name: string, model: ShuttleModel, dur
     y: s.planet?.trainY ?? 0,
     docked: true,
     assignedTo: 'group',
-    cargo: { id: s.nextId++, items: {}, settled: false },
+    cargo: { id: s.nextId++, items: {}, settled: false, owed: {} },
     serial: serialText(s.shuttleSerial),
     ownerGroupId: null,
     builtAt: -1,

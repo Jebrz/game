@@ -1,13 +1,15 @@
 // 小组自主行动状态机
 // 每个状态一个处理函数；决策（选择目标）与执行分离。
 
-import { GROUPS, SHUTTLE_MAINT, SHUTTLE_MODELS } from '../config/balance';
+import { GROUPS, RELATION, SHUTTLE_MAINT, SHUTTLE_MODELS } from '../config/balance';
 import { EVENTS, ITEM_INFO } from '../config/content';
 import { estimate, stage } from './catastrophe';
 import { findDeposit, freeSlots, heldSlot, releaseAllOf, reserveForDelivery, tryClaim, release } from './claims';
 import { clamp, dist, fmt, fmtTime, groupShuttle, log, members, rand } from './core';
 import { groupConsiderPurchases, settleCargo, unitPrice } from './economy';
 import { groupConsiderShuttle } from './hangar';
+import { activePermit, changeRelation, depositAccess } from './natives';
+import { assignedEvent, completeEvent, discoverNativeMine, discoverSignEvent } from './events';
 import { rawShortfall } from './objectives';
 import { decide, isHome, leaderPersonality, reformGroups, setState } from './groups';
 import { cargoCap, cargoUsed, exploreTime, fuelPerKm, mineRate, speed, tank } from './shuttles';
@@ -48,6 +50,12 @@ function tickGroup(s: GameState, g: Group): void {
       return;
     case 'unloading':
       if (sh) tickUnloading(s, g, sh);
+      return;
+    case 'toEvent':
+      if (sh) tickTravel(s, g, sh);
+      return;
+    case 'eventWork':
+      if (sh) tickEventWork(s, g, sh);
       return;
   }
 }
@@ -106,6 +114,24 @@ function thinkAtTrain(s: GameState, g: Group): void {
     setState(s, g, 'resting', '休整中');
     decide(s, g, avgFat > GROUPS.restFatigue ? `平均疲劳 ${fmt(avgFat)}，先休整再出勤` : '有成员健康不佳，休整治疗');
     return;
+  }
+  const ev = assignedEvent(s, g);
+  if (ev) {
+    const P = s.planet!;
+    const need = dist(P.trainX, P.trainY, ev.x, ev.y) * 2 * fuelPerKm(sh!) + ev.remaining * IDLE_FUEL_PER_MIN + SAFETY_FUEL;
+    const refill = Math.min(tank(sh!) - sh!.fuel, s.inventory.propellant);
+    if (sh!.fuel + refill >= need) {
+      s.inventory.propellant -= refill;
+      sh!.fuel += refill;
+      for (const p of members(s, g)) p.aboard = false;
+      sh!.docked = false;
+      g.recalled = false;
+      g.target = { kind: 'event', eventId: ev.id };
+      setState(s, g, 'toEvent', `前往执行：${ev.title}`);
+      decide(s, g, `按列车长的决定前往${ev.title}（剩余作业 ${fmtTime(ev.remaining)}）`);
+      return;
+    }
+    g.reason = `已被指派执行${ev.title}，但推进剂不足（需 ${fmt(need, 1)}）`;
   }
   const choice = chooseTarget(s, g, sh!, s.planet!.trainX, s.planet!.trainY, true);
   if (!choice) {
@@ -189,7 +215,7 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
         d.discoveredBy != null &&
         d.reserve > 0 &&
         d.zone !== 'hostile' &&
-        !(d.zone === 'permit' && !P.natives.permitGranted) &&
+        !depositAccess(s, d) &&
         (freeSlots(d) > 0 || heldSlot(d, g.id)),
     );
 
@@ -252,12 +278,9 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   // 采矿候选
   for (const dep of P.deposits) {
     if (dep.discoveredBy == null || dep.reserve <= 0 || dep.id === exclude) continue;
-    if (dep.zone === 'hostile') {
-      rejected.push(`${dep.name}位于敌对禁区`);
-      continue;
-    }
-    if (dep.zone === 'permit' && !P.natives.permitGranted) {
-      rejected.push(`${dep.name}在${P.natives.name}领地内，需要采矿许可`);
+    const access = depositAccess(s, dep);
+    if (access) {
+      rejected.push(access);
       continue;
     }
     if (free <= 0.5) continue;
@@ -361,6 +384,10 @@ function explain(s: GameState, g: Group, sh: Shuttle, c: Choice, all: Choice[], 
 function targetPoint(s: GameState, g: Group): { x: number; y: number } {
   const P = s.planet!;
   if (g.state === 'returning') return { x: P.trainX, y: P.trainY };
+  if (g.target?.kind === 'event') {
+    const ev = s.events.find((e) => e.id === g.target!.eventId)!;
+    return { x: ev.x, y: ev.y };
+  }
   if (g.target?.kind === 'explore') {
     const sign = P.signs.find((x) => x.id === g.target!.signId)!;
     return { x: sign.x, y: sign.y };
@@ -371,7 +398,7 @@ function targetPoint(s: GameState, g: Group): { x: number; y: number } {
 
 function tickTravel(s: GameState, g: Group, sh: Shuttle): void {
   const P = s.planet!;
-  if (g.state !== 'returning' && s.recallActive) return startReturn(s, g, sh, '接到紧急召回令，立即返航');
+  if (g.state !== 'returning' && s.recallActive) return startReturn(s, g, sh, g.state === 'toEvent' ? '接到紧急召回令，未开始事件作业，返航' : '接到紧急召回令，立即返航');
   const tp = targetPoint(s, g);
   const d = dist(sh.x, sh.y, tp.x, tp.y);
   const step = Math.min(d, speed(sh));
@@ -392,6 +419,15 @@ function tickTravel(s: GameState, g: Group, sh: Shuttle): void {
   }
   // 抵达
   if (g.state === 'returning') return arriveTrain(s, g, sh);
+  if (g.state === 'toEvent') {
+    const ev = s.events.find((e) => e.id === g.target!.eventId)!;
+    if (ev.status !== 'assigned') return startReturn(s, g, sh, `${ev.title}已不需要执行，返航`);
+    ev.status = 'active';
+    setState(s, g, 'eventWork', `在${ev.title}作业`);
+    g.timer = ev.remaining;
+    ev.log.push(`${fmtTime(s.time)} ${g.name}抵达现场开始作业`);
+    return;
+  }
   if (g.state === 'toExplore') {
     const sign = P.signs.find((x) => x.id === g.target!.signId)!;
     setState(s, g, 'exploring', `正在探索${sign.label}`);
@@ -454,10 +490,18 @@ function tickMining(s: GameState, g: Group, sh: Shuttle): void {
   const cap = cargoCap(sh);
   const rate = mineRate(s, g, sh, d.resource);
   const amount = Math.min(rate, d.reserve, cap - cargoUsed(sh));
-  if (amount > 0) {
+  const access = depositAccess(s, d);
+  if (access) return startReturn(s, g, sh, `${access}，停止作业返航`);
+  const permit = d.zone === 'permit' ? activePermit(s, d) : null;
+  const allowed = permit ? Math.min(amount, permit.cap - permit.extracted) : amount;
+  if (allowed > 0) {
     // 储量直接从矿点扣除，每分钟一次，避免重复扣矿
-    d.reserve = Math.max(0, d.reserve - amount);
-    sh.cargo.items[d.resource] = (sh.cargo.items[d.resource] ?? 0) + amount;
+    d.reserve = Math.max(0, d.reserve - allowed);
+    sh.cargo.items[d.resource] = (sh.cargo.items[d.resource] ?? 0) + allowed;
+    if (permit) {
+      permit.extracted += allowed;
+      if (permit.kind === 'share') sh.cargo.owed[d.resource] = (sh.cargo.owed[d.resource] ?? 0) + allowed * permit.sharePct;
+    }
   }
   sh.fuel = Math.max(0, sh.fuel - IDLE_FUEL_PER_MIN);
   // 风险区事件
@@ -490,6 +534,26 @@ function tickMining(s: GameState, g: Group, sh: Shuttle): void {
   if (stage(s) === 'edge' || stage(s) === 'impact') return startReturn(s, g, sh, '灾变临近，提前返航');
 }
 
+function tickEventWork(s: GameState, g: Group, sh: Shuttle): void {
+  const ev = s.events.find((e) => e.id === g.target!.eventId)!;
+  const st = stage(s);
+  if (s.recallActive || st === 'edge' || st === 'impact') {
+    // 中断：保留剩余进度，回到待执行；已投入不退
+    ev.status = 'assigned';
+    ev.remaining = g.timer;
+    ev.log.push(`${fmtTime(s.time)} 中断（剩余 ${fmtTime(g.timer)}）`);
+    log(s, 'research', `${ev.title}：${g.name}${s.recallActive ? '接到召回' : '因灾变临近'}中断作业，进度保留（剩余 ${fmtTime(g.timer)}），已投入不退。`);
+    return startReturn(s, g, sh, s.recallActive ? '接到紧急召回令，中断事件作业（进度保留）' : '灾变临近，中断事件作业');
+  }
+  sh.fuel = Math.max(0, sh.fuel - IDLE_FUEL_PER_MIN);
+  g.timer -= 1;
+  ev.remaining = g.timer;
+  g.status = `在${ev.title}作业（剩余 ${fmtTime(g.timer)}）`;
+  if (g.timer > 0) return;
+  completeEvent(s, g, ev);
+  startReturn(s, g, sh, `${ev.title}作业完成，带回成果`);
+}
+
 function tickExploring(s: GameState, g: Group, sh: Shuttle): void {
   if (s.recallActive) {
     const sign = s.planet!.signs.find((x) => x.id === g.target!.signId)!;
@@ -505,11 +569,19 @@ function tickExploring(s: GameState, g: Group, sh: Shuttle): void {
   sign.explored = true;
   sign.exploringGroupId = null;
   if (sign.kind === 'natives') {
+    const first = !P.natives.contacted;
     P.natives.contacted = true;
+    if (first) changeRelation(s, RELATION.contact, '初次接触，和平交流');
     sign.resultText = `${P.natives.name}的聚落。双方以手势和图形完成了初步交流。`;
     log(s, 'group', `${g.name}与${P.natives.name}建立联系！可在「航线」面板进行物资交易，或协商领地内的采矿许可。`);
     s.toasts.push({ t: s.time, title: `与${P.natives.name}建立联系`, text: '可交易物资、协商采矿许可（「航线」面板）。' });
     return reconsiderInField(s, g, sh, '接触完成');
+  }
+  if (sign.kind === 'ruin' && sign.eventKind) {
+    sign.resultText = sign.resultText || '发现可处理的地点';
+    log(s, 'group', `${g.name}调查${sign.label}：${sign.resultText}`);
+    discoverSignEvent(s, g, sign);
+    return reconsiderInField(s, g, sh, `发现${sign.label}（已提交列车长决定，本组继续其他工作）`);
   }
   if (sign.kind === 'ruin') {
     const items = Object.entries(sign.loot).filter(([, v]) => (v ?? 0) > 0);
@@ -530,6 +602,7 @@ function tickExploring(s: GameState, g: Group, sh: Shuttle): void {
     d.discoveredBy = g.id;
     d.discoveredAt = s.time;
   }
+  if (P.natives.kind === 'friendly') for (const d of found) if (d.zone === 'permit') discoverNativeMine(s, g, d);
   if (found.length) {
     sign.resultText = found.map((d) => `${d.name}（${ITEM_INFO[d.resource].label}，储量 ${d.initialReserve}，${d.slots.length} 个作业位置）`).join('；');
     log(s, 'group', `${g.name}确认${sign.label}：${sign.resultText}。结果已同步给列车长与全部小组。`);

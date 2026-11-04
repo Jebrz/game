@@ -65,13 +65,16 @@ export type GroupStateKind =
   | 'deploying'
   | 'mining'
   | 'returning'
-  | 'unloading';
+  | 'unloading'
+  | 'toEvent' // 前往事件地点执行玩家选定的方案
+  | 'eventWork'; // 在事件地点作业
 
 export interface GroupTarget {
-  kind: 'explore' | 'mine';
+  kind: 'explore' | 'mine' | 'event';
   signId?: number;
   depositId?: number;
   slotId?: number;
+  eventId?: number;
 }
 
 export interface Decision {
@@ -114,6 +117,8 @@ export interface CargoBatch {
   id: number; // 批次号，结算一次后作废
   items: Partial<Record<RawId, number>>;
   settled: boolean;
+  /** 按「分享产出」协议应交给原住民的部分（已包含在 items 中，结算时扣出，不进列车库存、不计贡献点） */
+  owed: Partial<Record<RawId, number>>;
 }
 
 export interface Shuttle {
@@ -178,6 +183,9 @@ export interface Sign {
   loot: Partial<Record<ItemId, number>>; // 遗迹中的遗留物资（探索后带回，只发一次）
   research: number; // 调查数据（研究点）
   lootTaken: boolean;
+  /** 需要决策的探索事件类型（发现时生成事件），以及预先确定的结果 */
+  eventKind?: EventKind;
+  eventRolls?: Record<string, number>;
 }
 
 export interface PlanetState {
@@ -217,9 +225,55 @@ export interface NativesState {
   r: number; // 领地 / 禁区半径
   detected: boolean; // 扫描后知道存在（友好为聚落信号，敌对为禁区）
   contacted: boolean; // 友好：小组实地接触后建立联系
-  permitGranted: boolean;
+  permitGranted: boolean; // 旧版本的整片领地许可（v4 存档迁移用；新协议见 permits）
   permitCost: Partial<Record<ItemId, number>>;
   trades: NativeTrade[];
+  /** 当地关系（每颗星球独立）：-100～100 */
+  relation: number;
+  relationLog: { t: number; delta: number; reason: string }[];
+  permits: Permit[];
+  sharePaid: number; // 已按协议分享的单位数（关系加成封顶用）
+}
+
+/** 原住民采矿许可协议（限定矿点、有效期与开采上限） */
+export interface Permit {
+  id: number;
+  depositId: number;
+  kind: 'pay' | 'share';
+  sharePct: number; // share 协议：交给原住民的比例
+  grantedAt: number;
+  expiresAt: number;
+  cap: number; // 许可内最多开采单位
+  extracted: number;
+  paid: Partial<Record<ItemId, number>>;
+}
+
+export type EventKind = 'facility' | 'nativeMine' | 'beacon';
+export type EventStatus = 'pending' | 'assigned' | 'active' | 'done' | 'declined' | 'expired';
+
+/** 探索事件（需要列车长决策的重大投入 / 外交 / 风险） */
+export interface ExploreEvent {
+  id: number;
+  kind: EventKind;
+  nodeIndex: number; // 所在航线节点
+  planetName: string;
+  siteId: number; // 迹象 id（设施、信标）或矿点 id（原住民矿区）；同一地点只生成一次
+  x: number;
+  y: number;
+  title: string;
+  finderGroupId: number | null;
+  discoveredAt: number;
+  status: EventStatus;
+  choice: string | null;
+  assignedGroupId: number | null; // 执行小组
+  work: number; // 需要的现场作业分钟
+  remaining: number; // 剩余作业分钟（中断后保留）
+  paid: Partial<Record<ItemId, number>>; // 已投入（选择时扣除）
+  /** 开局生成事件地点时预先确定的结果（读档不会重新随机） */
+  rolls: Record<string, number>;
+  result: string;
+  rewardGiven: boolean;
+  log: string[];
 }
 
 /** 航线节点：星球或公共交易站。星球地图在开局时一次生成并随存档保存。 */
@@ -348,4 +402,5 @@ export interface GameState {
   failReason: string;
   edgePauseTriggered: boolean;
   formationNote: string; // 最近一次「无法成立新组」的原因（只在变化时记录日志）
+  events: ExploreEvent[];
 }

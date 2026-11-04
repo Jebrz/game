@@ -21,11 +21,12 @@ export function serialize(s: GameState): string {
 export function deserialize(json: string): GameState {
   const f = JSON.parse(json) as SaveFile;
   if (!f || typeof f !== 'object' || !f.state) throw new Error('存档格式无效');
-  if (![1, 2, 3, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
+  if (![1, 2, 3, 4, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
   let s = f.state;
   if (f.version === 1) s = migrateV1(s);
   if (f.version <= 2) s = migrateV2(s);
   if (f.version <= 3) s = migrateV3(s);
+  if (f.version <= 4) s = migrateV4(s);
   s.paused = true; // 读档后暂停，便于确认状态
   return s;
 }
@@ -189,5 +190,27 @@ export function migrateV3(old: GameState): GameState {
   const first = s.journey.current === 0 && s.planet ? s.planet : s.journey.nodes[0].planet;
   if (first && first.deliveries === 0 && s.stats.deliveries > 0 && planets.every((p) => p.deliveries === 0)) first.deliveries = s.stats.deliveries;
   s.version = 4;
+  return s;
+}
+
+/**
+ * v4 → v5：探索事件、原住民关系与采矿许可。
+ * - 已生成的星球不重新随机：旧星球不会新增事件地点。
+ * - 原住民补齐关系字段；旧版本的整片领地许可（permitGranted）继续有效。
+ * - 运输机货舱补齐分享字段（旧货物没有分享义务）。
+ */
+export function migrateV4(old: GameState): GameState {
+  const s = old as GameState & Record<string, unknown>;
+  s.events = s.events ?? [];
+  const planets = [s.planet, ...s.journey.nodes.map((n) => n.planet)].filter((p): p is NonNullable<typeof p> => !!p);
+  for (const p of planets) {
+    const N = p.natives;
+    N.relation = N.relation ?? (N.contacted ? 5 : 0);
+    N.relationLog = N.relationLog ?? [];
+    N.permits = N.permits ?? [];
+    N.sharePaid = N.sharePaid ?? 0;
+  }
+  for (const sh of s.shuttles) sh.cargo.owed = sh.cargo.owed ?? {};
+  s.version = 5;
   return s;
 }

@@ -7,6 +7,7 @@ import { settleCargo, unitPrice, groupConsiderPurchases, purchaseOptions } from 
 import { serialize, deserialize } from '../src/sim/save';
 import * as A from '../src/sim/actions';
 import { autoPlayer } from './autoplay';
+import { legFuel } from '../src/sim/world';
 import type { GameState } from '../src/sim/types';
 
 function started(seed = 3): GameState {
@@ -297,7 +298,8 @@ describe('离站', () => {
       step(s);
     }
     s.train.driveRepaired = true;
-    s.inventory.trainFuel = 10;
+    const need = legFuel(s.journey.nodes[1].pos - s.journey.nodes[0].pos);
+    s.inventory.trainFuel = need;
     const out = A.outsideGroups(s);
     expect(out.length).toBeGreaterThan(0);
     expect(A.canDepart(s)).toContain('尚有小组未归');

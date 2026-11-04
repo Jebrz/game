@@ -194,7 +194,7 @@ describe('动态新增小组', () => {
     A.startScan(s);
     for (let i = 0; i < 400; i++) step(s);
     const loaded = deserialize(toLegacy(s, 3));
-    expect(loaded.version).toBe(4);
+    expect(loaded.version).toBe(5);
     expect(loaded.groups.every((g) => g.exploreStreak === 0)).toBe(true);
     expect(loaded.planet!.deliveries).toBe(s.stats.deliveries);
     for (let i = 0; i < 200; i++) step(loaded);
@@ -244,7 +244,7 @@ describe('推进剂与冰晶同时耗尽', () => {
     expect(A.canEnqueue(s, 'propellantEmergency', 1)).toBe('');
     const e0 = s.inventory.energy;
     A.enqueue(s, 'propellantEmergency', 2);
-    expect(s.inventory.energy).toBe(e0 - 120);
+    expect(s.inventory.energy).toBe(e0 - 180);
     let flew = false;
     for (let i = 0; i < 400 && !flew; i++) {
       step(s);

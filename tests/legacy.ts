@@ -1,8 +1,24 @@
 // 测试辅助：把当前状态还原成旧版本存档的数据形状（v1 / v2），用于验证迁移。
 import type { GameState } from '../src/sim/types';
 
-export function toLegacy(s: GameState, version: 1 | 2 | 3, trueArrival = 960): string {
+export function toLegacy(s: GameState, version: 1 | 2 | 3 | 4, trueArrival = 960): string {
   const o = JSON.parse(JSON.stringify(s));
+  // v5 新增：事件、原住民关系与许可、货舱分享、事件地点
+  delete o.events;
+  for (const sh of o.shuttles) delete sh.cargo.owed;
+  for (const P of [o.planet, ...o.journey.nodes.map((n: { planet: unknown }) => n.planet)]) {
+    if (!P) continue;
+    for (const k of ['relation', 'relationLog', 'permits', 'sharePaid']) delete P.natives[k];
+    for (const sg of P.signs) {
+      delete sg.eventKind;
+      delete sg.eventRolls;
+    }
+  }
+  for (const g of o.groups) if (g.state === 'toEvent' || g.state === 'eventWork') throw new Error('旧版本没有事件状态');
+  if (version === 4) {
+    o.version = 4;
+    return JSON.stringify({ version: 4, savedAt: '', gameTime: s.time, state: o });
+  }
   // v4 新增：按星球交付计数、小组连续探索计数、新组提示
   delete o.formationNote;
   for (const g of o.groups) delete g.exploreStreak;

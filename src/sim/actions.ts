@@ -264,4 +264,27 @@ export function cargoTotal(s: GameState): number {
 
 
 // ---------- 原住民 ----------
-export { canPermit, canTrade, grantPermit, trade } from './natives';
+export { canNegotiate, canTrade, trade } from './natives';
+import { grantPermit as grantPermitFor } from './natives';
+import { canCancel, cancelEvent, canChoose, choose, decline, discoverNativeMine } from './events';
+export { canCancel, canChoose };
+
+/** 列车长对事件作出选择（UI 与测试共用） */
+export function chooseEvent(s: GameState, eventId: number, optId: string): void {
+  const ev = s.events.find((e) => e.id === eventId);
+  if (ev) choose(s, ev, optId);
+}
+export function declineEvent(s: GameState, eventId: number): void {
+  const ev = s.events.find((e) => e.id === eventId);
+  if (ev) decline(s, ev);
+}
+export function cancelEventExec(s: GameState, eventId: number): void {
+  const ev = s.events.find((e) => e.id === eventId);
+  if (ev) cancelEvent(s, ev);
+}
+/** 在「航线」面板直接与原住民协商某个领地矿点（拒绝过或许可到期后重新协商） */
+export function negotiate(s: GameState, depositId: number, kind: 'pay' | 'share'): void {
+  const dep = s.planet?.deposits.find((d) => d.id === depositId);
+  if (dep) grantPermitFor(s, dep, kind);
+}
+export { discoverNativeMine };

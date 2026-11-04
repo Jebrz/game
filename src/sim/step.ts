@@ -4,6 +4,7 @@ import { STATION } from '../config/balance';
 import { tickCatastrophe } from './catastrophe';
 import { tickClaims } from './claims';
 import { tickJourney } from './journey';
+import { tickPermits } from './natives';
 import { tryFormNewGroup } from './groups';
 import { tickGroups } from './groupAI';
 import { tickMoodHourly, tickPeopleHourly, tickResources } from './survival';
@@ -20,6 +21,7 @@ export function step(s: GameState): void {
   if (s.phase === 'planet') {
     tickScan(s);
     tickClaims(s);
+    tickPermits(s);
     tickGroups(s);
     tickCatastrophe(s);
   } else if (s.phase === 'travel') {

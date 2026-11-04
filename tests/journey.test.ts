@@ -284,7 +284,7 @@ describe('星球类型与原住民', () => {
     const permitDeps = new Set(P.deposits.filter((d) => d.zone === 'permit').map((d) => d.id));
     for (let i = 0; i < 1200 && !P.natives.contacted; i++) {
       step(s);
-      if (!P.natives.permitGranted) for (const g of s.groups) if (g.target?.depositId != null) expect(permitDeps.has(g.target.depositId)).toBe(false);
+      if (!P.natives.permits.length) for (const g of s.groups) if (g.target?.depositId != null) expect(permitDeps.has(g.target.depositId)).toBe(false);
     }
     expect(P.natives.contacted).toBe(true);
     s.inventory.food = 100;
@@ -298,13 +298,18 @@ describe('星球类型与原住民', () => {
     A.trade(s, 'fuel');
     A.trade(s, 'fuel');
     expect(A.canTrade(s, 'fuel')).toContain('没有可交换');
-    // 库存不足不能协商
+    // 协商许可：需要翻译；库存不足不能支付；成功后只对指定矿点有效
+    const dep = P.deposits.find((d) => d.zone === 'permit')!;
+    dep.discoveredBy = s.groups[0].id;
+    expect(A.canNegotiate(s, dep, 'pay')).toContain('翻译');
+    s.research.done.push('translation');
     s.inventory.parts = 0;
-    expect(A.canPermit(s)).toContain('不足');
+    expect(A.canNegotiate(s, dep, 'pay')).toContain('不足');
     s.inventory.parts = 5;
-    A.grantPermit(s);
-    expect(P.natives.permitGranted).toBe(true);
+    A.negotiate(s, dep.id, 'pay');
+    expect(P.natives.permits.length).toBe(1);
     expect(s.inventory.parts).toBe(4);
+    expect(A.canNegotiate(s, dep, 'pay')).toContain('已有有效许可');
   });
 });
 
@@ -342,7 +347,7 @@ describe('旧存档迁移（v2 单星球 → v3）', () => {
     const s = started(2);
     for (let i = 0; i < 300; i++) step(s);
     const loaded = deserialize(toLegacy(s, 2, 960));
-    expect(loaded.version).toBe(4);
+    expect(loaded.version).toBe(5);
     expect(loaded.journey.nodes.map((n) => n.kind)).toEqual(['planet', 'station']);
     expect(Math.abs(minutesUntil(loaded.catastrophe.front, loaded.time, 0) - (960 - s.time))).toBeLessThan(1);
     expect(loaded.inventory).toEqual(s.inventory); // 不重复发资源

@@ -4,6 +4,7 @@
 import { MOOD, ROUTE, STATION } from '../config/balance';
 import { predictAtArrival } from './catastrophe';
 import { releaseAllOf } from './claims';
+import { expireEventsOnDeparture } from './events';
 import { fmt, fmtTime, groupShuttle, log, members } from './core';
 import { isHome, setState } from './groups';
 import type { GameState, RouteNode } from './types';
@@ -122,6 +123,7 @@ export function departTo(s: GameState, index: number, force = false): void {
     from.planet = P;
     s.planet = null;
   }
+  expireEventsOnDeparture(s, cur);
   from.status = 'visited';
   from.departedAt = s.time;
   for (let i = cur + 1; i < index; i++) {

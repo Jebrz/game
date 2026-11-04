@@ -1,6 +1,7 @@
 // 交付结算、贡献点、小组自主购买（运输机升级 / 基因强化）
 
-import { GENE, RAW_BASE_PRICE, SHUTTLE_UPGRADES, TRAIN, type UpgradeSpec } from '../config/balance';
+import { GENE, RAW_BASE_PRICE, RELATION, SHUTTLE_UPGRADES, TRAIN, type UpgradeSpec } from '../config/balance';
+import { changeRelation } from './natives';
 import { ITEM_INFO } from '../config/content';
 import { consume, costText, fmt, groupShuttle, log, members, missingItems, newId } from './core';
 import { decide, leaderPersonality } from './groups';
@@ -20,18 +21,31 @@ export function settleCargo(s: GameState, g: Group, sh: Shuttle): number {
   if (batch.settled) return 0;
   let points = 0;
   const parts: string[] = [];
+  const shared: string[] = [];
   for (const r of Object.keys(batch.items) as RawId[]) {
     const q = Math.floor((batch.items[r] ?? 0) * 100) / 100;
     if (q <= 0) continue;
-    s.inventory[r] += q;
-    const pts = q * unitPrice(s, r);
-    points += pts;
-    s.stats.rawDelivered[r] = (s.stats.rawDelivered[r] ?? 0) + q;
-    parts.push(`${ITEM_INFO[r].label} ${fmt(q)}`);
+    // 分享产出协议：应交原住民的部分从本批次扣出，不进列车库存、不计贡献点
+    const owed = Math.min(q, Math.floor(((batch.owed ?? {})[r] ?? 0) * 100) / 100);
+    const kept = Math.round((q - owed) * 100) / 100;
+    if (owed > 0) shared.push(`${ITEM_INFO[r].label} ${fmt(owed, 1)}`);
+    if (kept <= 0) continue;
+    s.inventory[r] += kept;
+    points += kept * unitPrice(s, r);
+    s.stats.rawDelivered[r] = (s.stats.rawDelivered[r] ?? 0) + kept;
+    parts.push(`${ITEM_INFO[r].label} ${fmt(kept)}`);
   }
   batch.settled = true;
   if (points > 0) g.exploreStreak = 0;
-  sh.cargo = { id: newId(s), items: {}, settled: false };
+  sh.cargo = { id: newId(s), items: {}, settled: false, owed: {} };
+  if (shared.length && s.planet) {
+    const N = s.planet.natives;
+    log(s, 'economy', `${g.name}按协议把 ${shared.join('、')} 交给${N.name}（不计入列车库存与贡献点）。`);
+    if (N.sharePaid < RELATION.shareMax) {
+      N.sharePaid += RELATION.shareStep;
+      changeRelation(s, RELATION.shareStep, '按约分享产出');
+    }
+  }
   if (points > 0) {
     points = Math.round(points * 10) / 10;
     g.points += points;
@@ -39,7 +53,7 @@ export function settleCargo(s: GameState, g: Group, sh: Shuttle): number {
     s.pointsIssued += points;
     s.stats.deliveries++;
     if (s.planet) s.planet.deliveries++;
-    log(s, 'economy', `${g.name}交付 ${parts.join('、')}，获得贡献点 ${fmt(points, 1)}（批次 #${batch.id}）`);
+    log(s, 'economy', `${g.name}交付 ${parts.join('、')}，获得贡献点 ${fmt(points, 1)}（批次 #${batch.id}${shared.length ? '，仅按列车留存部分计算' : ''}）`);
   }
   return points;
 }

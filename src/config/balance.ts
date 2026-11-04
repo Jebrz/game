@@ -3,7 +3,7 @@
 
 import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
 
-export const SAVE_VERSION = 4; // v4：动态小组；v3：多星球航线与灾变前锋；v2：运输机制造与机库（旧存档读取时自动升级）
+export const SAVE_VERSION = 5; // v5：探索事件、原住民关系与采矿许可；v4：动态小组；v3：多星球航线与灾变前锋；v2：运输机制造与机库（旧存档读取时自动升级）
 
 export const TIME = {
   minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟
@@ -236,4 +236,59 @@ export const START = {
     oxygen: 700,
     energy: 520,
   } as Record<ItemId, number>,
+};
+
+// ---------------- 探索事件与原住民（原型参数） ----------------
+// 事件选项：cost=选择时从列车库存扣除；work=执行小组在现场作业的分钟；reward=范围（开局生成地点时就确定实际值，读档不变）
+export interface EventOptionDef {
+  id: string;
+  label: string;
+  desc: string;
+  cost: Partial<Record<ItemId, number>>;
+  work: number;
+  fatigue?: number; // 执行小组每人额外疲劳
+  reward: Partial<Record<ItemId, [number, number]>>;
+  research?: [number, number]; // 研究点（投入研究储备）
+}
+
+export const EVENT_DEFS = {
+  facility: {
+    title: '废弃设施',
+    desc: '一座旧时代的轨道维护站，部分设备仍可启动。',
+    options: [
+      { id: 'repair', label: '投入零件修复', desc: '修复动力与仓储，取出较多物资。', cost: { parts: 3 }, work: 120, reward: { parts: [5, 8], propellant: [15, 25], trainFuel: [1, 3] } },
+      { id: 'salvage', label: '只回收现成物品', desc: '不修复，快速取走散落的物资。', cost: {}, work: 30, reward: { parts: [1, 2], propellant: [6, 10] } },
+    ] as EventOptionDef[],
+  },
+  beacon: {
+    title: '异常信标',
+    desc: '一座仍在低功率运转的信标，编码方式不明。',
+    options: [
+      { id: 'record', label: '短暂记录', desc: '记录信号片段后离开。', cost: {}, work: 20, reward: {}, research: [5, 7] },
+      { id: 'deep', label: '深入调查', desc: '接入列车能源，长时间解析信标内容。成员疲劳增加。', cost: { energy: 40 }, work: 90, fatigue: 15, reward: {}, research: [16, 22] },
+    ] as EventOptionDef[],
+  },
+  nativeMine: {
+    title: '原住民矿区',
+    desc: '矿点位于原住民领地内，作业需要对方许可。',
+  },
+};
+
+export const PERMIT = {
+  duration: 480, // 许可有效期（分钟）
+  payCost: { food: 12, parts: 1 } as Partial<Record<ItemId, number>>,
+  payCap: 160, // 支付许可：最多开采单位
+  sharePct: 0.3, // 分享产出：交给原住民的比例
+  shareCap: 200,
+  cooperative: { payFoodMult: 0.5, sharePct: 0.2 }, // 合作关系的优惠
+};
+
+export const RELATION = {
+  cooperativeAt: 30,
+  waryAt: -30,
+  contact: 5,
+  trade: 2,
+  permitPaid: 4,
+  shareStep: 1, // 每完成一次分享交付
+  shareMax: 10, // 分享带来的关系提升上限
 };
