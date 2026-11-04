@@ -361,6 +361,15 @@ export class App {
       case 'releaseShuttle':
         A.releaseShuttle(s, Number(arg));
         break;
+      case 'orderShuttle':
+        A.captainOrderShuttle(s);
+        break;
+      case 'expandHangar':
+        A.expandHangar(s);
+        break;
+      case 'captainSwap':
+        A.captainSwap(s, Number(a), Number(b));
+        break;
       case 'recall':
         A.setRecall(s, arg === 'on');
         break;

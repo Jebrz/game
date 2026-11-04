@@ -246,16 +246,18 @@ function drawInterior(ctx: CanvasRenderingContext2D, id: string, x: number, y: n
     // 运输机机库
     const docked = s.shuttles.filter((sh) => sh.docked);
     ctx.fillStyle = '#8fb8d8';
-    docked.forEach((_, k) => {
-      const sx = x + w * 0.5 + k * (w * 0.24);
+    // 停靠的运输机（最多画 5 架，按泊位排开）
+    const slotW = (w * 0.46) / Math.max(2, s.hangar.capacity);
+    docked.slice(0, 5).forEach((_, k) => {
+      const sx = x + w * 0.5 + k * slotW;
       ctx.beginPath();
       ctx.moveTo(sx, y + 18);
-      ctx.lineTo(sx + w * 0.2, y + 24);
+      ctx.lineTo(sx + slotW * 0.85, y + 24);
       ctx.lineTo(sx, y + 30);
       ctx.fill();
     });
     ctx.fillStyle = '#ffe2b0';
-    ctx.fillText(`机库 ${docked.length}/${s.shuttles.length}`, x + w * 0.5, y + 44);
+    ctx.fillText(`泊位 ${s.shuttles.length + s.queue.filter((j) => j.kind === 'shuttle').length}/${s.hangar.capacity}`, x + w * 0.5, y + 44);
   } else if (id === 'lab') {
     ctx.fillStyle = '#d6d0c4';
     ctx.fillRect(x + 6, y + 14, w * 0.3, 6);

@@ -3,7 +3,7 @@
 
 import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2; // v2：运输机制造与机库（v1 存档读取时自动升级）
 
 export const TIME = {
   minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟
@@ -71,6 +71,33 @@ export const SHUTTLE_UPGRADES: UpgradeSpec[] = [
   { id: 'cargoBay', label: '扩容货舱', desc: '运载量 +20', points: 110, items: { parts: 2 }, cargoBonus: 20 },
   { id: 'drill', label: '强化钻头', desc: '采矿效率 ×1.3', points: 130, items: { parts: 2 }, mineRateMult: 1.3 },
 ];
+
+// 运输机制造（原型参数）。材料从列车公共库存扣除；小组订单另付贡献点，贡献点不能替代材料。
+// 工时按标准效率计，实际速度 = 工时 / 加工速度倍率（工程人员），与其他加工共用同一条生产线和能耗。
+export const SHUTTLE_BUILD = {
+  model: 'hauler' as ShuttleModel,
+  items: { parts: 6, iron: 16, copper: 8, crystal: 4 } as Partial<Record<ItemId, number>>,
+  time: 150,
+  groupPoints: 160, // 小组订购时支付的贡献点（另需同样的材料）
+  serialPrefix: 'TJ-',
+};
+
+// 机库：每架运输机（含出勤、备用、列车长座机、建造中）占一个泊位
+export const HANGAR = {
+  baseCapacity: 3,
+  expansions: [
+    { add: 1, items: { parts: 3, iron: 12 } as Partial<Record<ItemId, number>>, time: 60, label: '扩建泊位 Ⅰ' },
+    { add: 1, items: { parts: 4, iron: 16, copper: 6 } as Partial<Record<ItemId, number>>, time: 90, label: '扩建泊位 Ⅱ' },
+  ],
+};
+
+// 小组自主订购新机的条件（原型参数）
+export const GROUP_ORDER = {
+  lowDurability: 40, // 主运输机耐久低于此值视为需要换机
+  cargoFullRatio: 0.9, // 货舱满载率高于此值且新机运载量更大时视为需要换机
+  minTrips: 3,
+  pointsBuffer: 20, // 下单后至少保留的贡献点
+};
 
 export const SHUTTLE_MAINT = {
   autoRepairBelow: 45, // 耐久低于此值时，列车承担例行维修

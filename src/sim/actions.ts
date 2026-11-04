@@ -2,9 +2,10 @@
 
 import { DEMAND_BONUS, GROUPS, MOOD, RAW_BASE_PRICE, STATION, TRAIN, TIME, SURVIVAL } from '../config/balance';
 import { ITEM_INFO, PROFESSION_INFO, RECIPES, RESEARCH } from '../config/content';
-import { add, consume, fmt, groupShuttle, log, members, missingItems, newId } from './core';
+import { consume, fmt, groupShuttle, log, members, missingItems, newId } from './core';
 import { isHome, reformGroups, setState } from './groups';
 import { releaseAllOf } from './claims';
+import { cancelOrder, insertJob, orderShuttle, swapShuttle } from './hangar';
 import { cargoUsed } from './shuttles';
 import type { GameState, ItemId, Policies, Profession, RawId } from './types';
 
@@ -44,26 +45,44 @@ export function canEnqueue(s: GameState, recipeId: string, n = 1): string {
   const r = RECIPES.find((x) => x.id === recipeId);
   if (!r) return '无此配方';
   if (s.phase === 'failed') return '游戏已结束';
-  if (s.queue.length + n > 12) return '队列已满（最多 12 项）';
+  if (s.queue.length + n > 12) return `队列已满（最多 12 项，现有 ${s.queue.length}）`;
   const miss = missingItems(s.inventory, r.inputs, n);
   return miss.length ? `原料不足：${miss.join('、')}` : '';
 }
-/** 入队时立即扣除原料（预留），取消时退还，杜绝负库存 */
+/** 入队时立即扣除原料（预留并记在订单上），取消时原样退还，杜绝负库存 */
 export function enqueue(s: GameState, recipeId: string, n = 1): void {
   if (canEnqueue(s, recipeId, n)) return;
   const r = RECIPES.find((x) => x.id === recipeId)!;
   for (let i = 0; i < n; i++) {
     consume(s.inventory, r.inputs);
-    s.queue.push({ id: newId(s), recipeId, remaining: r.time, total: r.time, started: false });
+    insertJob(s, {
+      id: newId(s),
+      kind: 'recipe',
+      recipeId,
+      remaining: r.time,
+      total: r.time,
+      started: false,
+      orderedBy: null,
+      reserved: { ...r.inputs },
+      pointsPaid: 0,
+      orderedAt: s.time,
+    });
   }
 }
 export function cancelJob(s: GameState, jobId: number): void {
-  const i = s.queue.findIndex((j) => j.id === jobId);
-  if (i < 0) return;
-  const j = s.queue[i];
-  s.queue.splice(i, 1);
-  add(s.inventory, RECIPES.find((x) => x.id === j.recipeId)!.inputs);
+  cancelOrder(s, jobId, 'captain');
 }
+
+// ---------- 运输机制造 / 机库 / 换机（规则见 hangar.ts） ----------
+export function captainOrderShuttle(s: GameState): void {
+  orderShuttle(s, null);
+}
+export function captainSwap(s: GameState, groupId: number, shId: number): void {
+  const g = s.groups.find((x) => x.id === groupId);
+  const sh = s.shuttles.find((x) => x.id === shId);
+  if (g && sh) swapShuttle(s, g, sh, 'captain', '');
+}
+export { assignCaptain, canAssignCaptain, canExpandHangar, canOrderShuttle, canSwap, expandHangar, releaseShuttle } from './hangar';
 
 // ---------- 主驱动 ----------
 export function canRepairDrive(s: GameState): string {
@@ -145,39 +164,6 @@ export function setRequirement(s: GameState, prof: Profession, n: number): void 
   s.groupRequirement = next;
   log(s, 'group', `列车长调整出勤小组职业要求：${PROFESSION_INFO[prof].label} ${v} 人。`);
   reformGroups(s);
-}
-
-// ---------- 运输机配属 ----------
-export function canAssignCaptain(s: GameState, shId: number): string {
-  const sh = s.shuttles.find((x) => x.id === shId);
-  if (!sh) return '无此运输机';
-  if (sh.assignedTo === 'captain') return '已配属列车长';
-  const g = s.groups.find((x) => x.shuttleId === shId);
-  if (g && !isHome(g)) return `${g.name}正在使用（出勤中）`;
-  return '';
-}
-export function assignCaptain(s: GameState, shId: number): void {
-  if (canAssignCaptain(s, shId)) return;
-  const sh = s.shuttles.find((x) => x.id === shId)!;
-  const g = s.groups.find((x) => x.shuttleId === shId);
-  if (g) {
-    g.shuttleId = null;
-    setState(s, g, 'grounded', '运输机已被列车长配属，无运输机可用');
-    g.timer = 1;
-  }
-  sh.assignedTo = 'captain';
-  log(s, 'system', `列车长将${sh.name}配属为座机${g ? `（${g.name}因此暂停出勤）` : ''}。亲自探索玩法为后续内容。`);
-}
-export function releaseShuttle(s: GameState, shId: number): void {
-  const sh = s.shuttles.find((x) => x.id === shId);
-  if (!sh || sh.assignedTo !== 'captain') return;
-  sh.assignedTo = 'group';
-  const g = s.groups.find((x) => x.shuttleId == null);
-  if (g) {
-    g.shuttleId = sh.id;
-    g.timer = 1;
-  }
-  log(s, 'system', `列车长释放${sh.name}，交给${g ? g.name : '小组'}使用。`);
 }
 
 // ---------- 召回 / 离站 ----------

@@ -7,6 +7,7 @@ import { estimate, stage } from './catastrophe';
 import { findDeposit, freeSlots, heldSlot, releaseAllOf, reserveForDelivery, tryClaim, release } from './claims';
 import { clamp, dist, fmt, fmtTime, groupShuttle, log, members, rand } from './core';
 import { groupConsiderPurchases, settleCargo, unitPrice } from './economy';
+import { groupConsiderShuttle } from './hangar';
 import { decide, isHome, leaderPersonality, reformGroups, setState } from './groups';
 import { cargoCap, cargoUsed, exploreTime, fuelPerKm, mineRate, speed, tank } from './shuttles';
 import type { Deposit, GameState, Group, RawId, Shuttle, Sign } from './types';
@@ -73,7 +74,7 @@ function tickResting(s: GameState, g: Group): void {
 function blockAtTrain(s: GameState, g: Group, sh: Shuttle | null): string {
   if (s.phase !== 'planet') return s.phase === 'travel' ? '列车航行中，随车待命' : '列车停泊中，随车待命';
   if (!g.memberIds.length) return g.missing.length ? `编组不足：缺少 ${g.missing.join('、')}` : '无成员';
-  if (!sh) return '运输机已被列车长配属，无运输机可用';
+  if (!sh) return '没有主运输机可用（已被列车长配属或等待换装）';
   if (s.recallActive) return '召回令生效，留守列车';
   if (!s.planet?.scanned) return '等待列车扫描结果';
   const st = stage(s);
@@ -88,8 +89,10 @@ function blockAtTrain(s: GameState, g: Group, sh: Shuttle | null): string {
 }
 
 function thinkAtTrain(s: GameState, g: Group): void {
+  // 先处理运输机：领取/换装本组新机，或在确有需要时自主订购（小组自主决定，不需审批）
+  if (g.memberIds.length) groupConsiderShuttle(s, g);
   const sh = groupShuttle(s, g);
-  // 有贡献点时先考虑支出（小组自主决定）
+  // 有贡献点时再考虑其他支出
   if (g.memberIds.length) groupConsiderPurchases(s, g);
   const block = blockAtTrain(s, g, sh);
   if (block) {

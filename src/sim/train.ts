@@ -3,6 +3,7 @@
 import { RESEARCH_RATE, SURVIVAL, TRAIN } from '../config/balance';
 import { ITEM_INFO, RECIPES, RESEARCH } from '../config/content';
 import { add, fmt, log } from './core';
+import { completeJob } from './hangar';
 import { deptStats, processingSpeed } from './staff';
 import type { GameState } from './types';
 
@@ -24,6 +25,7 @@ export function tickScan(s: GameState): void {
   }
 }
 
+/** 生产线每分钟只推进队列头部一项（加工配方、运输机制造、机库扩建共用产能与能耗） */
 export function tickProcessing(s: GameState): boolean {
   const job = s.queue[0];
   if (!job) return false;
@@ -34,6 +36,10 @@ export function tickProcessing(s: GameState): boolean {
   job.remaining -= processingSpeed(s);
   if (job.remaining <= 0) {
     s.queue.shift();
+    if (job.kind !== 'recipe') {
+      completeJob(s, job);
+      return true;
+    }
     const out = recipeOutputs(s, job.recipeId);
     add(s.inventory, out);
     const r = RECIPES.find((x) => x.id === job.recipeId)!;

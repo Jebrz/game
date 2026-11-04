@@ -123,8 +123,12 @@ export interface Shuttle {
   x: number;
   y: number;
   docked: boolean;
-  assignedTo: 'group' | 'captain';
+  /** group=某小组主运输机；captain=列车长座机；spare=备用（停在机库，待分配或待原订购组领取） */
+  assignedTo: 'group' | 'captain' | 'spare';
   cargo: CargoBatch;
+  serial: string; // 唯一编号
+  ownerGroupId: number | null; // 出资小组；null 表示列车公共资产
+  builtAt: number; // 完工时间，-1 表示开局即有
 }
 
 export interface Slot {
@@ -177,12 +181,19 @@ export interface PlanetState {
   hazardZones: { x: number; y: number; r: number }[];
 }
 
+export type JobKind = 'recipe' | 'shuttle' | 'hangar';
+
 export interface ProcessJob {
   id: number;
-  recipeId: string;
+  kind: JobKind;
+  recipeId: string; // recipe：配方 id；shuttle：型号；hangar：扩建级别
   remaining: number; // 剩余工时（分钟，按 1.0 效率）
   total: number;
   started: boolean;
+  orderedBy: number | null; // 下单小组 id；null 表示列车长（公共物资）
+  reserved: Partial<Record<ItemId, number>>; // 下单时已扣除的材料，取消时原样返还
+  pointsPaid: number; // 小组已支付的贡献点，取消时原样返还
+  orderedAt: number;
 }
 
 export type Phase = 'intro' | 'planet' | 'travel' | 'station' | 'failed';
@@ -226,6 +237,8 @@ export interface GameState {
   demandBonus: Record<RawId, number>;
   pointsIssued: number;
   queue: ProcessJob[];
+  hangar: { capacity: number; level: number };
+  shuttleSerial: number; // 已发放的运输机编号数
   train: {
     hull: number;
     driveRepair: number; // 已投入维修零件

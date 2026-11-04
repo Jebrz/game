@@ -1,6 +1,7 @@
 // 侧边详细面板（每个标签一个函数，返回 HTML）
 
-import { DEMAND_BONUS, GENE, GROUPS, ROBOTS, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
+import { DEMAND_BONUS, GENE, GROUP_ORDER, GROUPS, ROBOTS, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
+import { canExpandHangar, canOrderShuttle, hangarUsage, itemListText, jobLabel, jobSource, nextExpansion, QUEUE_MAX, refundText } from '../sim/hangar';
 import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INFO, RAW_IDS, RECIPES, RESEARCH } from '../config/content';
 import * as A from '../sim/actions';
 import { estimate, stage, STAGE_LABEL } from '../sim/catastrophe';
@@ -13,7 +14,7 @@ import { cargoCap, cargoUsed, fuelPerKm, speed, tank } from '../sim/shuttles';
 import { deptStats, processingSpeed } from '../sim/staff';
 import { deterrence, moodFactors, moodSummary } from '../sim/survival';
 import { recipeOutputs } from '../sim/train';
-import type { GameState, ItemId, Passenger, Profession, RawId, TrainDept } from '../sim/types';
+import type { GameState, ItemId, Passenger, Profession, RawId, Shuttle, TrainDept } from '../sim/types';
 import { bar, btn, esc, sbtn } from './html';
 
 export type TabId = 'train' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
@@ -167,34 +168,75 @@ function groupsPanel(s: GameState): string {
 }
 
 // ---------------- 运输机 ----------------
+const ROLE_TEXT = (s: GameState, sh: Shuttle): string => {
+  if (sh.assignedTo === 'captain') return '列车长座机';
+  if (sh.assignedTo === 'group') return `${s.groups.find((g) => g.shuttleId === sh.id)?.name ?? '小组'}主运输机`;
+  if (sh.ownerGroupId != null) return `备用 · 归${s.groups.find((g) => g.id === sh.ownerGroupId)?.name ?? '小组'}（待该组领取）`;
+  return '备用 · 公共（待分配）';
+};
+
 function shuttlesPanel(s: GameState): string {
-  let h = `<h3>运输机</h3><div class="note">运输机使用<b>运输机推进剂</b>，与列车的<b>轨道燃料</b>不通用。运输机直接到矿点采矿并运回原料，不做机载加工。本阶段共 ${s.shuttles.length} 架，不会凭空增加。</div>`;
-  for (const sh of s.shuttles) {
-    const g = s.groups.find((x) => x.shuttleId === sh.id);
-    const spec = SHUTTLE_MODELS[sh.model];
-    const items = Object.entries(sh.cargo.items).filter(([, v]) => (v ?? 0) > 0.01);
-    h += `<div class="card"><div class="head"><b>${esc(sh.name)}</b><span>${spec.label} · Lv${sh.level}</span></div>`;
-    h += `<div>使用者：${sh.assignedTo === 'captain' ? '列车长座机' : g ? esc(g.name) : '无'} · ${sh.docked ? '停靠列车' : '外出中'}</div>`;
-    h += `<table>
-      <tr><td>运载量</td><td class="num">${fmt(cargoUsed(sh))}/${cargoCap(sh)} 单位</td></tr>
-      <tr><td>推进剂</td><td class="num">${fmt(sh.fuel, 1)}/${tank(sh)}</td></tr>
-      <tr><td>耐久</td><td class="num ${sh.durability < 30 ? 'badtext' : ''}">${fmt(sh.durability)}/100</td></tr>
-      <tr><td>航速</td><td class="num">${fmt(speed(sh), 1)} km/分</td></tr>
-      <tr><td>油耗</td><td class="num">${fmt(fuelPerKm(sh), 2)} /km</td></tr>
-      <tr><td>基础采矿效率</td><td class="num">${fmt(spec.mineRate * (sh.upgrades.includes('drill') ? 1.3 : 1), 2)} 单位/分</td></tr>
-    </table>`;
-    h += `<div>货舱：${items.length ? items.map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${fmt(v ?? 0)}`).join('、') : '空'} <span class="note">（批次 #${sh.cargo.id}）</span></div>`;
-    h += `<div>升级：${sh.upgrades.length ? sh.upgrades.map((u) => SHUTTLE_UPGRADES.find((x) => x.id === u)!.label).join('、') : '无'}</div>`;
-    h += `<div class="row">${
-      sh.assignedTo === 'captain'
-        ? btn('释放给小组', 'releaseShuttle', sh.id)
-        : btn('配属为列车长座机', 'assignCaptain', sh.id, A.canAssignCaptain(s, sh.id))
-    }</div></div>`;
+  const u = hangarUsage(s);
+  let h = `<h3>机库</h3>`;
+  h += `<table><tr><td>容量</td><td class="num"><b>${u.capacity}</b> 个泊位</td></tr>
+    <tr><td>已占用</td><td class="num">${u.shuttles}（小组主力 ${u.main} · 备用 ${u.spare} · 列车长 ${u.captain}；其中出勤中 ${u.out}）</td></tr>
+    <tr><td>建造预留</td><td class="num">${u.building}</td></tr>
+    <tr><td>空闲</td><td class="num ${u.free <= 0 ? 'badtext' : ''}">${u.free}</td></tr></table>`;
+  h += `<div class="note">每架运输机（含出勤中、备用、列车长座机）都占一个泊位；建造中的运输机下单时就预留泊位。</div>`;
+  const e = nextExpansion(s);
+  if (e) {
+    const why = canExpandHangar(s);
+    h += `<div class="row">${sbtn(`${e.label}（+${e.add} 泊位）`, 'expandHangar', '', why.join('；'))}<span class="note">${esc(itemListText(e.items))} · 标准工时 ${e.time} 分</span></div>${why.length ? `<div class="why">${esc(why.join('；'))}</div>` : ''}`;
+  } else h += `<div class="note">机库已扩建到本阶段上限。</div>`;
+
+  const spec = SHUTTLE_MODELS[SHUTTLE_BUILD.model];
+  const spd = processingSpeed(s);
+  h += `<h3>制造运输机</h3><div class="card"><div class="head"><b>${spec.label}运输机</b><span class="note">标准工时 ${SHUTTLE_BUILD.time} 分（当前约 ${fmtTime(SHUTTLE_BUILD.time / Math.max(0.2, spd))}）</span></div>
+    <div>运载 ${spec.cargo} · 采矿 ${spec.mineRate}/分 · 航速 ${spec.speed} km/分 · 油耗 ${spec.fuelPerKm}/km · 油箱 ${spec.tank} · 耐久 100</div>
+    <div>材料（公共库存）：${esc(itemListText(SHUTTLE_BUILD.items))}；生产线运行耗能 ${SURVIVAL.processingEnergyHour} kWh/小时，速度取决于工程人员</div>
+    <div class="note">新机出厂不带推进剂、货舱为空；完工后进入备用状态。小组订购需另付 ${SHUTTLE_BUILD.groupPoints} 贡献点（贡献点不能代替材料）。</div>`;
+  const why = canOrderShuttle(s, null);
+  h += `<div class="row">${sbtn('列车长下单（公共物资）', 'orderShuttle', '', why.join('；'), 'primary')}</div>${why.length ? `<div class="why">${esc(why.join('；'))}</div>` : ''}</div>`;
+  const orders = s.queue.filter((j) => j.kind !== 'recipe');
+  if (orders.length) {
+    h += `<h4>制造与扩建订单</h4><ul class="plain">${orders
+      .map((j) => `<li>${esc(jobLabel(j))} · ${esc(jobSource(s, j))} · 进度 ${fmt((1 - j.remaining / j.total) * 100)}% · 剩余约 ${fmtTime(j.remaining / Math.max(0.2, spd))}${s.queue[0] === j ? '' : '（排队中）'}</li>`)
+      .join('')}</ul><div class="note">完整队列与取消见下方「共享生产队列」。</div>`;
   }
-  h += `<div class="note">配属座机会让原使用小组停止出勤。列车长亲自驾驶探索为后续内容，本阶段仅支持配属与释放。</div>`;
+
+  h += `<h3>运输机（${s.shuttles.length} 架）</h3><div class="note">运输机使用<b>运输机推进剂</b>，与列车的<b>轨道燃料</b>不通用。运输机直接到矿点采矿并运回原料，不做机载加工。</div>`;
+  for (const sh of s.shuttles) {
+    const items = Object.entries(sh.cargo.items).filter(([, v]) => (v ?? 0) > 0.01);
+    h += `<div class="card"><div class="head"><b>${esc(sh.name)}</b><span>${SHUTTLE_MODELS[sh.model].label} · ${esc(sh.serial)} · Lv${sh.level}</span></div>`;
+    h += `<div>用途：<b>${esc(ROLE_TEXT(s, sh))}</b> · ${sh.docked ? '停靠机库' : '出勤中'} · 产权：${sh.ownerGroupId == null ? '列车公共' : `${esc(s.groups.find((g) => g.id === sh.ownerGroupId)?.name ?? '小组')}出资`}${sh.builtAt >= 0 ? ` · ${clockText(sh.builtAt)} 完工` : ''}</div>`;
+    h += `<div>运载 ${fmt(cargoUsed(sh))}/${cargoCap(sh)} · 推进剂 ${fmt(sh.fuel, 1)}/${tank(sh)} · <span class="${sh.durability < 30 ? 'badtext' : ''}">耐久 ${fmt(sh.durability)}</span> · 航速 ${fmt(speed(sh), 1)} · 油耗 ${fmt(fuelPerKm(sh), 2)}/km · 采矿 ${fmt(SHUTTLE_MODELS[sh.model].mineRate * (sh.upgrades.includes('drill') ? 1.3 : 1), 2)}/分</div>`;
+    h += `<div>货舱：${items.length ? items.map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${fmt(v ?? 0)}`).join('、') : '空'} · 升级：${sh.upgrades.length ? sh.upgrades.map((x) => SHUTTLE_UPGRADES.find((y) => y.id === x)!.label).join('、') : '无'}</div>`;
+    // 操作
+    const acts: string[] = [];
+    if (sh.assignedTo === 'captain') acts.push(sbtn('释放（交还小组或转备用）', 'releaseShuttle', sh.id));
+    else {
+      const w = A.canAssignCaptain(s, sh.id);
+      acts.push(sbtn('配属列车长', 'assignCaptain', sh.id, w) + (w ? `<span class="why">${esc(w)}</span>` : ''));
+    }
+    if (sh.assignedTo === 'spare') {
+      for (const g of s.groups) {
+        const w = A.canSwap(s, g, sh, 'captain');
+        const cur = s.shuttles.find((x) => x.id === g.shuttleId);
+        acts.push(sbtn(`分配给${g.name}${cur ? '（换机）' : ''}`, 'captainSwap', `${g.id}:${sh.id}`, w) + (w ? `<span class="why">${esc(w)}</span>` : ''));
+      }
+    }
+    h += `<div class="row">${acts.join(' ')}</div></div>`;
+  }
+  h += `<h4>说明</h4><ul class="plain">
+    <li>每个小组只有一架主运输机。换机要求小组已返航、卸完货、不在卸货中；旧机转为备用（保留升级、耐久与燃料），不会销毁。</li>
+    <li>小组出资的新机只由该组领取；列车长只能配属或分配列车公共运输机，不能征用小组出资的运输机。</li>
+    <li>小组会在主运输机不可用、耐久低于 ${GROUP_ORDER.lowDurability} 或货舱长期装满时，用贡献点自主订购（每组同时一单）。</li>
+    <li>新小组：本阶段小组数量固定为 ${s.groups.length} 个，动态组建新组为后续内容；新机可用于换机、备用或配属列车长。</li>
+    <li>列车长亲自驾驶探索为后续内容。</li></ul>`;
   h += `<h4>可购买升级（由小组用贡献点购买，并消耗列车库存）</h4><table><tr><th>升级</th><th>效果</th><th class="num">贡献点</th><th>库存消耗</th></tr>`;
-  for (const u of SHUTTLE_UPGRADES) h += `<tr><td>${u.label}</td><td>${u.desc}</td><td class="num">${u.points}</td><td>${Object.entries(u.items).map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`).join('、')}</td></tr>`;
+  for (const up of SHUTTLE_UPGRADES) h += `<tr><td>${up.label}</td><td>${up.desc}</td><td class="num">${up.points}</td><td>${Object.entries(up.items).map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`).join('、')}</td></tr>`;
   h += `</table><div class="note">耐久低于 45 时列车承担例行维护（每件零件 +30）；低于 50 航速 ×0.85；低于 15 禁止出勤。</div>`;
+  h += queueHtml(s);
   return h;
 }
 
@@ -205,7 +247,7 @@ function industryPanel(s: GameState): string {
     h += `<tr><td>${ITEM_INFO[k].label}</td><td class="num">${fmt(s.inventory[k], k === 'propellant' ? 1 : 0)} ${ITEM_INFO[k].unit}</td><td class="note">${ITEM_INFO[k].desc}</td></tr>`;
   }
   h += `</table>`;
-  h += `<h3>加工设备（工程货运车）</h3><div class="note">原料在入队时预留扣除，取消退还。加工速度 ×${fmt(processingSpeed(s), 2)}（取决于工程人员），运行中耗能 ${SURVIVAL.processingEnergyHour} kWh/小时。不使用传送带。</div>`;
+  h += `<h3>加工设备（工程货运车）</h3><div class="note">原料在入队时预留扣除，取消原样退还。运输机制造与机库扩建也在这条生产线上（见「运输机」面板）。加工速度 ×${fmt(processingSpeed(s), 2)}（取决于工程人员），运行中耗能 ${SURVIVAL.processingEnergyHour} kWh/小时。不使用传送带。</div>`;
   for (const r of RECIPES) {
     const out = recipeOutputs(s, r.id);
     const r1 = A.canEnqueue(s, r.id, 1);
@@ -216,13 +258,24 @@ function industryPanel(s: GameState): string {
       .map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`)
       .join(' + ')}</div><div class="row">${sbtn('加入 ×1', 'enqueue', `${r.id}:1`, r1)}${sbtn('加入 ×5', 'enqueue', `${r.id}:5`, r5)}${r1 ? `<span class="why">${esc(r1)}</span>` : ''}</div></div>`;
   }
-  h += `<h4>生产队列（${s.queue.length}/12）</h4>`;
-  if (!s.queue.length) h += `<div class="note">空闲</div>`;
+  h += queueHtml(s);
+  return h;
+}
+
+
+/** 共享生产队列（加工配方、运输机制造、机库扩建） */
+export function queueHtml(s: GameState): string {
+  const spd = processingSpeed(s);
+  let h = `<h4>共享生产队列（${s.queue.length}/${QUEUE_MAX}）</h4><div class="note">一次只推进第一项；公共订单排在小组订单之前，被插队的小组订单保留已完成工时。加工速度 ×${fmt(spd, 2)}。</div>`;
+  if (!s.queue.length) return h + `<div class="note">空闲</div>`;
+  h += `<table><tr><th></th><th>项目</th><th>来源</th><th class="num">剩余</th><th></th></tr>`;
   s.queue.forEach((j, i) => {
-    const r = RECIPES.find((x) => x.id === j.recipeId)!;
-    h += `<div class="row"><span>${i === 0 ? '▶' : `${i + 1}.`} ${r.label}</span>${i === 0 ? `<span style="flex:1">${bar(1 - j.remaining / j.total, 'warm')}</span>` : '<span style="flex:1"></span>'}${sbtn('取消', 'cancelJob', j.id)}</div>`;
+    const prog = 1 - j.remaining / j.total;
+    const cancelWhy = j.orderedBy != null ? '小组出资的订单只能由该小组取消' : '';
+    h += `<tr><td>${i === 0 ? '▶' : i + 1}</td><td>${esc(jobLabel(j))}${j.kind !== 'recipe' || i === 0 ? bar(prog, 'warm') : ''}</td><td>${esc(jobSource(s, j))}</td><td class="num">约 ${fmtTime(j.remaining / Math.max(0.2, spd))}${j.started && i !== 0 ? '<br><span class="note">已暂停</span>' : ''}</td><td>${sbtn('取消', 'cancelJob', j.id, cancelWhy)}${j.kind !== 'recipe' && !cancelWhy ? `<br><span class="note">${esc(refundText(j))}</span>` : ''}</td></tr>`;
   });
-  if (s.queue.length && s.inventory.energy < 1) h += `<div class="badtext">能源耗尽，加工暂停</div>`;
+  h += `</table><div class="note">取消规则：原样返还下单时扣除的材料与贡献点，不会多返；已消耗的能源与工时不退。</div>`;
+  if (s.inventory.energy < 1) h += `<div class="badtext">能源耗尽，生产线暂停</div>`;
   return h;
 }
 

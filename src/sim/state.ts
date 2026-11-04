@@ -1,6 +1,6 @@
 // 初始状态构建
 
-import { CATASTROPHE, GROUPS, POPULATION, ROBOTS, SAVE_VERSION, SHUTTLE_COUNT, SHUTTLE_MODELS, START, TRAIN } from '../config/balance';
+import { CATASTROPHE, GROUPS, HANGAR, POPULATION, ROBOTS, SAVE_VERSION, SHUTTLE_BUILD, SHUTTLE_COUNT, SHUTTLE_MODELS, START, TRAIN } from '../config/balance';
 import { GROUP_NAMES, PLANET_TEMPLATE, ROSTER } from '../config/content';
 import { log, rand } from './core';
 import { reformGroups } from './groups';
@@ -28,6 +28,8 @@ export function createInitialState(seed = 20261104): GameState {
     demandBonus: { iron: 0, copper: 0, ice: 0, crystal: 0, bio: 0 },
     pointsIssued: 0,
     queue: [],
+    hangar: { capacity: HANGAR.baseCapacity, level: 0 },
+    shuttleSerial: 0,
     train: { hull: TRAIN.startHull, driveRepair: 0, driveRepaired: false, driveRepairTimer: 0, lifeSupport: 0.85 },
     research: { done: [], current: null, progress: 0 },
     policies: { rations: 'normal', workload: 'normal', reservePartsForDrive: true, basicRadius: 45, security: 'standby' },
@@ -138,21 +140,29 @@ function makePassenger(
   };
 }
 
-function makeShuttle(s: GameState, name: string, model: ShuttleModel, durability: number): Shuttle {
+export function makeShuttle(s: GameState, name: string, model: ShuttleModel, durability: number, fuel?: number): Shuttle {
+  s.shuttleSerial += 1;
   return {
     id: s.nextId++,
     name,
     model,
     level: 1,
     upgrades: [],
-    fuel: SHUTTLE_MODELS[model].tank,
+    fuel: fuel ?? SHUTTLE_MODELS[model].tank,
     durability,
-    x: 0,
-    y: 0,
+    x: s.planet?.trainX ?? 0,
+    y: s.planet?.trainY ?? 0,
     docked: true,
     assignedTo: 'group',
     cargo: { id: s.nextId++, items: {}, settled: false },
+    serial: serialText(s.shuttleSerial),
+    ownerGroupId: null,
+    builtAt: -1,
   };
+}
+
+export function serialText(n: number): string {
+  return `${SHUTTLE_BUILD.serialPrefix}${String(n).padStart(2, '0')}`;
 }
 
 function generatePlanet(s: GameState): PlanetState {
