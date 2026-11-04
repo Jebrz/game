@@ -4,8 +4,17 @@
 
 基于 **Vite + TypeScript**，界面为 DOM + Canvas 程序绘制，不依赖外部素材。
 
-> 本仓库原有的地下城游戏已完整保留：分支 `backup/dungeon-game`（已推送）与本地标签 `dungeon-backup-2026-11-04`。
-> 原公开部署来自 `claude/serene-ritchie-qv18mk` 分支，本分支未改动它；本分支的 Pages 工作流已改为仅手动触发，不会自动发布。
+## 在线试玩
+
+- 星空列车试玩版：<https://jebrz.github.io/game/star-train/>
+- 原地下城游戏（保持不变）：<https://jebrz.github.io/game/>
+
+两款游戏在同一个 GitHub Pages 站点的不同路径下。`.github/workflows/deploy.yml` 会把地下城从当前线上版本的提交（`59092fa`）原样重新构建到 `/game/`，把本分支构建到 `/game/star-train/`；部署前逐个比对线上地下城文件，不一致就中止，不会覆盖旧游戏。推送本分支会自动更新试玩版。
+
+存档：两者同域名共享浏览器存储，但星空列车只使用 `startrain.` 开头的键，地下城不使用浏览器存储，互不覆盖。
+
+> 注意：如果以后从 `claude/serene-ritchie-qv18mk` 分支再次运行它自己的部署工作流，会只发布地下城，`/game/star-train/` 会暂时消失；重新运行本分支的工作流即可恢复。
+> 地下城代码另有备份：分支 `backup/dungeon-game` 与本地标签 `dungeon-backup-2026-11-04`。
 
 ## 启动
 
@@ -32,7 +41,7 @@ npm run build   # 类型检查 + 生产构建到 dist/
 ```
 
 ```bash
-npm run preview # 预览生产构建：http://localhost:4173/game/
+npm run preview # 预览生产构建：http://localhost:4173/game/star-train/
 ```
 
 ## 操作
@@ -108,4 +117,4 @@ tests/                vitest：规则测试、完整流程、多种子
 
 ## 测试
 
-`npm run check` 运行类型检查与 21 项测试，覆盖：暂停冻结与加速一致性、先到先得与保留/到期释放、等待不超时、批次只结算一次、库存/资金不足时拒绝、存读档后继续运行结果完全一致且不重复发奖、配属座机、强行离站、两组自主行动全程不变量检查，以及多种子从开局走到交易站。
+`npm run check` 运行类型检查与 22 项测试，覆盖：暂停冻结与加速一致性、先到先得与保留/到期释放、等待不超时、批次只结算一次、库存/资金不足时拒绝、存读档后继续运行结果完全一致且不重复发奖、配属座机、强行离站、两组自主行动全程不变量检查，以及多种子从开局走到交易站。

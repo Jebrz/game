@@ -1,8 +1,12 @@
 name: 部署到 GitHub Pages
 
-# 星空列车开发分支：不自动发布，避免覆盖现有公开部署（地下城游戏）。
-# 需要发布时由仓库维护者在 Actions 页面手动运行。
+# 同一个 Pages 站点同时提供两款游戏：
+#   /game/             原地下城（从当前线上版本的提交 59092fa 原样构建）
+#   /game/star-train/  星空列车试玩版（本分支）
+# 部署前会逐个比对线上地下城文件，若重新构建的结果与线上不一致则中止，不会覆盖旧游戏。
 on:
+  push:
+    branches: [claude/zealous-davinci-j32qp4]
   workflow_dispatch:
 
 permissions:
@@ -12,32 +16,92 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  DUNGEON_SHA: 59092fac76c000dd399b5d22087e5fedb46715c4
+  SITE: https://jebrz.github.io
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出星空列车
+        uses: actions/checkout@v4
+        with:
+          path: train
+      - name: 检出地下城（线上版本提交）
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DUNGEON_SHA }}
+          path: dungeon
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+      - name: 构建地下城（/game/）
+        working-directory: dungeon
+        run: npm ci && npm run build
+      - name: 构建星空列车（/game/star-train/）
+        working-directory: train
+        env:
+          BASE_PATH: /game/star-train/
+        run: npm ci && npm run check && npm run build
+      - name: 核对地下城与线上完全一致（不一致则中止部署）
+        run: |
+          set -e
+          cd dungeon/dist
+          n=0
+          for f in $(find . -type f | sed 's#^\./##'); do
+            url="$SITE/game/$f"
+            curl -fsSL "$url" -o /tmp/live_file
+            if ! cmp -s "$f" /tmp/live_file; then
+              echo "::error::地下城文件与线上不一致：$f"
+              exit 1
+            fi
+            echo "一致：$f"
+            n=$((n+1))
+          done
+          echo "地下城 $n 个文件与线上逐字节一致"
+      - name: 组合站点
+        run: |
+          mkdir -p site/star-train
+          cp -r dungeon/dist/. site/
+          cp -r train/dist/. site/star-train/
+          touch site/.nojekyll
+          find site -type f | sort
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: site
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url }}star-train/
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  verify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: 验证两个地址及其资源
+        run: |
+          set -e
+          sleep 20
+          check() {
+            page="$1"
+            curl -fsSL "$page" -o /tmp/page.html
+            echo "页面 200：$page"
+            for a in $(grep -oE '(src|href)="/[^"]+"' /tmp/page.html | sed -E 's/^(src|href)="//; s/"$//'); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE$a")
+              echo "  $code $a"
+              [ "$code" = "200" ] || { echo "::error::资源不可用 $a"; exit 1; }
+            done
+          }
+          check "$SITE/game/"
+          check "$SITE/game/star-train/"
+          grep -q '<title>星空列车</title>' /tmp/page.html && echo "星空列车标题正确"
