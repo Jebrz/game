@@ -9,6 +9,7 @@ import { clamp, dist, fmt, fmtTime, groupShuttle, log, members, rand } from './c
 import { groupConsiderPurchases, settleCargo, unitPrice } from './economy';
 import { groupConsiderShuttle } from './hangar';
 import { activePermit, changeRelation, depositAccess } from './natives';
+import { isMentoring, isTraining, onJob } from './training';
 import { assignedEvent, completeEvent, discoverNativeMine, discoverSignEvent } from './events';
 import { rawShortfall } from './objectives';
 import { decide, isHome, leaderPersonality, reformGroups, setState } from './groups';
@@ -88,6 +89,8 @@ function blockAtTrain(s: GameState, g: Group, sh: Shuttle | null): string {
   if (!s.planet?.scanned) return '等待列车扫描结果';
   const st = stage(s);
   if (st === 'edge' || st === 'impact') return '灾变临近，不再出勤';
+  const training = members(s, g).filter((p) => isTraining(s, p) || isMentoring(s, p));
+  if (training.length) return `成员${training.map((p) => `${p.name}（${isTraining(s, p) ? '脱产培训中' : '授课中'}）`).join('、')}，暂不可出勤`;
   const rec = members(s, g).filter((p) => p.recoveringUntil > s.time);
   if (rec.length) {
     const left = Math.max(...rec.map((p) => p.recoveringUntil - s.time));
@@ -408,6 +411,7 @@ function tickTravel(s: GameState, g: Group, sh: Shuttle): void {
     sh.y += ((tp.y - sh.y) / d) * step;
   }
   sh.fuel = Math.max(0, sh.fuel - fuelUse);
+  for (const p of members(s, g)) if (g.memberRoles[p.id] === 'pilot') onJob(p, 'pilot');
   if (g.state !== 'returning') {
     const back = dist(sh.x, sh.y, P.trainX, P.trainY) * fuelPerKm(sh);
     if (sh.fuel < back + 0.5) return startReturn(s, g, sh, '因燃料不足返航');
@@ -498,6 +502,7 @@ function tickMining(s: GameState, g: Group, sh: Shuttle): void {
     // 储量直接从矿点扣除，每分钟一次，避免重复扣矿
     d.reserve = Math.max(0, d.reserve - allowed);
     sh.cargo.items[d.resource] = (sh.cargo.items[d.resource] ?? 0) + allowed;
+    for (const p of members(s, g)) if (g.memberRoles[p.id] === 'miner') onJob(p, 'miner');
     if (permit) {
       permit.extracted += allowed;
       if (permit.kind === 'share') sh.cargo.owed[d.resource] = (sh.cargo.owed[d.resource] ?? 0) + allowed * permit.sharePct;
@@ -561,6 +566,7 @@ function tickExploring(s: GameState, g: Group, sh: Shuttle): void {
     return startReturn(s, g, sh, '接到紧急召回令，中止探索返航');
   }
   sh.fuel = Math.max(0, sh.fuel - IDLE_FUEL_PER_MIN);
+  for (const p of members(s, g)) if (g.memberRoles[p.id] === 'surveyor') onJob(p, 'surveyor');
   g.timer -= 1;
   g.status = `正在探索（剩余 ${g.timer} 分）`;
   if (g.timer > 0) return;

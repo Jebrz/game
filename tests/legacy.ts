@@ -1,8 +1,18 @@
 // 测试辅助：把当前状态还原成旧版本存档的数据形状（v1 / v2），用于验证迁移。
 import type { GameState } from '../src/sim/types';
 
-export function toLegacy(s: GameState, version: 1 | 2 | 3 | 4, trueArrival = 960): string {
+export function toLegacy(s: GameState, version: 1 | 2 | 3 | 4 | 5, trueArrival = 960): string {
   const o = JSON.parse(JSON.stringify(s));
+  // v6 新增：资格、课程、年龄、组内名额、培训状态
+  if (o.training?.enrollments?.length) throw new Error('旧版本没有培训');
+  delete o.training;
+  for (const p of o.passengers) for (const k of ['age', 'quals', 'coursesDone', 'courseProgress', 'coursePaid']) delete p[k];
+  for (const g of o.groups) delete g.memberRoles;
+  o.queue = o.queue.filter((j: { kind: string }) => j.kind !== 'training');
+  if (version === 5) {
+    o.version = 5;
+    return JSON.stringify({ version: 5, savedAt: '', gameTime: s.time, state: o });
+  }
   // v5 新增：事件、原住民关系与许可、货舱分享、事件地点
   delete o.events;
   for (const sh of o.shuttles) delete sh.cargo.owed;

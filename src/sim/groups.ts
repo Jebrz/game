@@ -3,6 +3,10 @@
 
 import { GROUPS, TRAIN_MIN_STAFF } from '../config/balance';
 import { GROUP_NAMES, PROFESSION_INFO } from '../config/content';
+import { COURSES, FIELD_MIN_AGE } from '../config/balance';
+import { hasQual, isTraining, mentorLoad } from './training';
+
+const COURSE_PROF: Record<string, Profession> = Object.fromEntries(COURSES.map((c) => [c.id, c.prof]));
 import { log, person } from './core';
 import type { GameState, Group, Passenger, Profession, Shuttle } from './types';
 
@@ -22,7 +26,10 @@ function freeCandidates(s: GameState, exclude: Set<number>): Passenger[] {
       !exclude.has(p.id) &&
       p.health >= GROUPS.minHealthToSortie &&
       p.fatigue <= GROUPS.restFatigue &&
-      p.recoveringUntil <= s.time,
+      p.recoveringUntil <= s.time &&
+      p.age >= FIELD_MIN_AGE &&
+      !isTraining(s, p) &&
+      mentorLoad(s, p) === 0,
   );
 }
 
@@ -82,13 +89,17 @@ export function reformGroups(s: GameState): void {
     const released: string[] = [];
     const keep: Passenger[] = [];
     const byProf = new Map<Profession, Passenger[]>();
-    for (const p of ms) byProf.set(p.profession, [...(byProf.get(p.profession) ?? []), p]);
+    for (const p of ms) {
+      const role = g.memberRoles[p.id] ?? p.profession;
+      byProf.set(role, [...(byProf.get(role) ?? []), p]);
+    }
     for (const [prof, list] of byProf) {
       const n = req[prof] ?? 0;
       const sorted = list.sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
       keep.push(...sorted.slice(0, n));
       for (const p of sorted.slice(n)) {
         p.groupId = null;
+        delete g.memberRoles[p.id];
         released.push(p.name);
       }
     }
@@ -99,15 +110,16 @@ export function reformGroups(s: GameState): void {
     const missing: string[] = [];
     for (const [prof, need] of Object.entries(req) as [Profession, number][]) {
       if (!need) continue;
-      const have = keep.filter((p) => p.profession === prof).length;
+      const have = keep.filter((p) => (g.memberRoles[p.id] ?? p.profession) === prof).length;
       if (have >= need) continue;
       const pool = freeCandidates(s, reserved)
-        .filter((p) => p.profession === prof)
+        .filter((p) => hasQual(p, prof))
         .sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
       const got = pool.slice(0, need - have);
       for (const p of got) {
         p.groupId = g.id;
         g.memberIds.push(p.id);
+        g.memberRoles[p.id] = prof;
         added.push(p.name);
       }
       if (have + got.length < need) missing.push(`${PROFESSION_INFO[prof].label} ×${need - have - got.length}`);
@@ -135,7 +147,8 @@ export interface FormationCheck {
   reasons: string[];
   spare: Shuttle | null;
   picked: Passenger[];
-  available: Partial<Record<Profession, number>>; // 可出勤的空闲人员（已扣除列车必需人手）
+  roles: Map<number, Profession>; // 每人承担的名额
+  available: Partial<Record<Profession, number>>; // 具备该资格的空闲可出勤人员（已扣除列车必需人手；一人多资格时分别计入）
   spares: number; // 可用于新组的公共备用机
 }
 
@@ -145,7 +158,7 @@ export function checkNewGroup(s: GameState): FormationCheck {
   const reserved = reservedForTrain(s);
   const cands = freeCandidates(s, reserved);
   const available: Partial<Record<Profession, number>> = {};
-  for (const p of cands) available[p.profession] = (available[p.profession] ?? 0) + 1;
+  for (const p of cands) for (const q of p.quals) available[q] = (available[q] ?? 0) + 1;
   // 可用的公共备用机：未被配属、未被预约、不属于任何小组出资、停在机库
   const spares = s.shuttles.filter((x) => x.assignedTo === 'spare' && x.ownerGroupId == null && x.docked && !s.groups.some((g) => g.pendingSwap === x.id));
   if (s.phase === 'intro' || s.phase === 'failed') reasons.push('游戏未进行');
@@ -153,20 +166,26 @@ export function checkNewGroup(s: GameState): FormationCheck {
   const needy = s.groups.filter((g) => g.memberIds.length && g.shuttleId == null);
   if (spares.length && needy.length) reasons.push(`${needy.map((g) => g.name).join('、')}缺主运输机，公共备用机应先由列车长分配给它们`);
   const picked: Passenger[] = [];
+  const roles = new Map<number, Profession>();
   for (const [prof, need] of Object.entries(s.groupRequirement) as [Profession, number][]) {
     if (!need) continue;
-    const pool = cands.filter((p) => p.profession === prof).sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
-    picked.push(...pool.slice(0, need));
+    // 一名多资格乘客只占一个名额：已被选中的人不再计入其他职业
+    const pool = cands.filter((p) => hasQual(p, prof) && !picked.includes(p)).sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
+    for (const p of pool.slice(0, need)) {
+      picked.push(p);
+      roles.set(p.id, prof);
+    }
     if (pool.length < need) {
       const minStaff = TRAIN_MIN_STAFF[prof] ?? 0;
-      const tired = s.passengers.filter((p) => !p.isCaptain && !p.headRole && !p.leftBehind && p.groupId == null && p.profession === prof && !cands.includes(p) && !reserved.has(p.id)).length;
+      const tired = s.passengers.filter((p) => !p.isCaptain && !p.headRole && !p.leftBehind && p.groupId == null && hasQual(p, prof) && !cands.includes(p) && !reserved.has(p.id)).length;
+      const inTraining = s.training.enrollments.filter((e) => COURSE_PROF[e.courseId] === prof).length;
       reasons.push(
-        `缺${PROFESSION_INFO[prof].label} ×${need - pool.length}（空闲可出勤 ${pool.length}${minStaff ? `，需保留 ${minStaff} 名在列车运营` : ''}${tired ? `，另有 ${tired} 人因健康/疲劳/恢复暂不能出勤` : ''}）`,
+        `缺${PROFESSION_INFO[prof].label} ×${need - pool.length}（空闲合格 ${pool.length}${minStaff ? `，需保留 ${minStaff} 名在列车运营` : ''}${tired ? `，另有 ${tired} 人因健康/疲劳/恢复/培训/授课暂不能出勤` : ''}${inTraining ? `，${inTraining} 人正在接受该职业培训` : ''}${['pilot', 'surveyor', 'miner', 'engineer'].includes(prof) ? '；可在「培训」面板安排课程' : ''}）`,
       );
     }
   }
   if (requirementTotal(s.groupRequirement) < 2) reasons.push('职业要求过少');
-  return { ok: reasons.length === 0, reasons, spare: spares[0] ?? null, picked, available, spares: spares.length };
+  return { ok: reasons.length === 0, reasons, spare: spares[0] ?? null, picked, roles, available, spares: spares.length };
 }
 
 const EXTRA_NAMES = ['赤鸢组', '青岚组', '玄鹭组', '白鲸组', '苍狼组', '金蜂组'];
@@ -194,6 +213,7 @@ export function tryFormNewGroup(s: GameState): Group | null {
     name: uniqueGroupName(s),
     leaderId: null,
     memberIds: c.picked.map((p) => p.id),
+    memberRoles: Object.fromEntries(c.roles),
     shuttleId: c.spare.id,
     points: 0,
     pointsEarned: 0,
@@ -223,7 +243,7 @@ export function tryFormNewGroup(s: GameState): Group | null {
   chooseLeader(s, g);
   const leader = person(s, g.leaderId!);
   s.formationNote = '';
-  log(s, 'group', `新小组成立：${g.name}（${c.picked.map((p) => `${p.name}·${PROFESSION_INFO[p.profession].label}`).join('、')}），组长 ${leader.name}（${leader.personality === 'bold' ? '进取' : '稳健'}），领取公共备用机 ${c.spare.name}。贡献点从 0 开始。`);
+  log(s, 'group', `新小组成立：${g.name}（${c.picked.map((p) => `${p.name}·${PROFESSION_INFO[c.roles.get(p.id)!].label}${c.roles.get(p.id) !== p.profession ? `（背景${PROFESSION_INFO[p.profession].label}，培训取得资格）` : ''}`).join('、')}），组长 ${leader.name}（${leader.personality === 'bold' ? '进取' : '稳健'}），领取公共备用机 ${c.spare.name}。贡献点从 0 开始。`);
   s.toasts.push({ t: s.time, title: '新小组成立', text: `${g.name}领取 ${c.spare.name}，将自主出勤。` });
   return g;
 }

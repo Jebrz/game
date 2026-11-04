@@ -194,7 +194,7 @@ describe('动态新增小组', () => {
     A.startScan(s);
     for (let i = 0; i < 400; i++) step(s);
     const loaded = deserialize(toLegacy(s, 3));
-    expect(loaded.version).toBe(5);
+    expect(loaded.version).toBe(6);
     expect(loaded.groups.every((g) => g.exploreStreak === 0)).toBe(true);
     expect(loaded.planet!.deliveries).toBe(s.stats.deliveries);
     for (let i = 0; i < 200; i++) step(loaded);

@@ -7,7 +7,8 @@
 // - 泊位占用 = 全部现存运输机（含出勤、备用、列车长座机）+ 队列中的建造订单。
 // - 新机完工后为备用：列车长订单 → 公共备用，待列车长分配；小组订单 → 归该组所有，只由该组领取。
 
-import { GROUP_ORDER, HANGAR, SHUTTLE_BUILD, SHUTTLE_MODELS, TRAIN } from '../config/balance';
+import { GROUP_ORDER, HANGAR, SHUTTLE_BUILD, SHUTTLE_MODELS, TRAIN, TRAINING } from '../config/balance';
+import { completeTrainingExpansion } from './training';
 import { ITEM_INFO, RECIPES } from '../config/content';
 import { stage } from './catastrophe';
 import { add, consume, costText, fmt, log, missingItems, newId } from './core';
@@ -73,6 +74,7 @@ export function ownedSpares(s: GameState, g: Group): Shuttle[] {
 export function jobLabel(j: ProcessJob): string {
   if (j.kind === 'shuttle') return `制造运输机（${SHUTTLE_MODELS[j.recipeId as keyof typeof SHUTTLE_MODELS].label}）`;
   if (j.kind === 'hangar') return HANGAR.expansions[Number(j.recipeId)]?.label ?? '扩建机库';
+  if (j.kind === 'training') return TRAINING.expansions[Number(j.recipeId)]?.label ?? '培训位扩建';
   return RECIPES.find((r) => r.id === j.recipeId)?.label ?? j.recipeId;
 }
 
@@ -230,6 +232,10 @@ export function completeJob(s: GameState, j: ProcessJob): void {
     s.hangar.level += 1;
     log(s, 'economy', `${e.label}完工：机库容量 → ${s.hangar.capacity}。`);
     s.toasts.push({ t: s.time, title: '机库扩建完成', text: `机库容量 ${s.hangar.capacity}。` });
+    return;
+  }
+  if (j.kind === 'training') {
+    completeTrainingExpansion(s, Number(j.recipeId));
     return;
   }
   if (j.kind === 'shuttle') {

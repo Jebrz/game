@@ -34,7 +34,12 @@ export type TrainDept = 'engineering' | 'logistics' | 'medical' | 'research';
 export interface Passenger {
   id: number;
   name: string;
-  profession: Profession;
+  profession: Profession; // 原始背景（不随培训改变）
+  age: number;
+  quals: Profession[]; // 已取得的职业资格（技能达到门槛；组队按资格而非背景）
+  coursesDone: string[]; // 已完成的课程（同一课程不重复领取）
+  courseProgress: Record<string, number>; // 课程进度 0-1（取消后保留，重报从此继续）
+  coursePaid: Record<string, boolean>; // 该课程材料是否已付（每人每课程只付一次）
   skills: Record<SkillId, number>;
   health: number; // 0-100
   fatigue: number; // 0-100
@@ -87,6 +92,7 @@ export interface Group {
   name: string;
   leaderId: number | null;
   memberIds: number[];
+  memberRoles: Record<number, Profession>; // 每名成员在组内承担的唯一名额（一人只占一个名额）
   shuttleId: number | null;
   points: number; // 贡献点（小组共有）
   pointsEarned: number;
@@ -291,7 +297,7 @@ export interface RouteNode {
   notes: string[]; // 访问记录摘要
 }
 
-export type JobKind = 'recipe' | 'shuttle' | 'hangar';
+export type JobKind = 'recipe' | 'shuttle' | 'hangar' | 'training';
 
 export interface ProcessJob {
   id: number;
@@ -403,4 +409,23 @@ export interface GameState {
   edgePauseTriggered: boolean;
   formationNote: string; // 最近一次「无法成立新组」的原因（只在变化时记录日志）
   events: ExploreEvent[];
+  training: TrainingState;
+}
+
+/** 脱产培训 */
+export interface Enrollment {
+  id: number;
+  courseId: string;
+  traineeId: number;
+  mentorId: number | null; // 当前授课导师（暂停时释放）
+  startedAt: number;
+  manualPause: boolean;
+  pauseReason: string; // 自动暂停原因（空 = 正在进行）
+  skillStart: number;
+}
+
+export interface TrainingState {
+  seats: number; // 培训设施名额（科研医疗车的基础培训位）
+  level: number; // 已扩容次数
+  enrollments: Enrollment[];
 }

@@ -1,8 +1,9 @@
 // 初始状态构建
 
-import { CATASTROPHE, GROUPS, HANGAR, POPULATION, ROBOTS, SAVE_VERSION, SHUTTLE_BUILD, SHUTTLE_COUNT, SHUTTLE_MODELS, START, TRAIN } from '../config/balance';
+import { CATASTROPHE, GROUPS, HANGAR, TRAINING, POPULATION, ROBOTS, SAVE_VERSION, SHUTTLE_BUILD, SHUTTLE_COUNT, SHUTTLE_MODELS, START, TRAIN } from '../config/balance';
 import { GROUP_NAMES, ROSTER } from '../config/content';
 import { generateRoute } from './world';
+import { initialQuals } from './training';
 import { log, rand } from './core';
 import { reformGroups } from './groups';
 import type { GameState, Passenger, Shuttle, ShuttleModel, SkillId } from './types';
@@ -50,6 +51,7 @@ export function createInitialState(seed = 20261104): GameState {
     edgePauseTriggered: false,
     formationNote: '',
     events: [],
+    training: { seats: TRAINING.baseSeats, level: 0, enrollments: [] },
   };
   s.catastrophe.bias = (rand(s) * 2 - 1) * CATASTROPHE.biasRange;
 
@@ -60,6 +62,8 @@ export function createInitialState(seed = 20261104): GameState {
   ROSTER.forEach((r, i) => {
     const p = makePassenger(s, r.name, r.profession, r.skills, r.head ?? null, r.compatibility);
     if (r.personality) p.personality = r.personality;
+    p.age = r.age ?? 30;
+    p.quals = initialQuals(p);
     p.carId = i % 2 === 0 ? 'dorm1' : 'dorm2';
     s.passengers.push(p);
   });
@@ -76,6 +80,7 @@ export function createInitialState(seed = 20261104): GameState {
       name: GROUP_NAMES[i],
       leaderId: null,
       memberIds: [],
+      memberRoles: {},
       shuttleId: s.shuttles[i]?.id ?? null,
       points: 0,
       pointsEarned: 0,
@@ -147,6 +152,11 @@ function makePassenger(
     recoveringUntil: -1,
     aboard: true,
     leftBehind: false,
+    age: 40,
+    quals: [],
+    coursesDone: [],
+    courseProgress: {},
+    coursePaid: {},
   };
 }
 

@@ -4,6 +4,7 @@ import { RESEARCH_RATE, SURVIVAL, TRAIN } from '../config/balance';
 import { ITEM_INFO, RECIPES, RESEARCH } from '../config/content';
 import { add, fmt, log } from './core';
 import { completeJob } from './hangar';
+import { onJob } from './training';
 import { deptStats, processingSpeed } from './staff';
 import type { GameState } from './types';
 
@@ -45,6 +46,8 @@ export function tickProcessing(s: GameState): boolean {
   s.inventory.energy -= e;
   job.started = true;
   job.remaining -= processingSpeed(s);
+  // 在岗学习：在工程部门实际参与加工的、具备工程资格的人
+  for (const p of deptStats(s).engineering.workers) onJob(p, 'engineer');
   if (job.remaining <= 0) {
     s.queue.shift();
     if (job.kind !== 'recipe') {

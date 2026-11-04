@@ -327,7 +327,7 @@ describe('生成与存档', () => {
     // 只取尚未生成事件的时刻
     s.events = [];
     const loaded = deserialize(toLegacy(s, 4));
-    expect(loaded.version).toBe(5);
+    expect(loaded.version).toBe(6);
     expect(loaded.events).toEqual([]);
     expect(loaded.planet!.signs.every((x) => !x.eventKind)).toBe(true);
     for (const n of loaded.journey.nodes) if (n.planet) expect(n.planet.natives.permits).toEqual([]);

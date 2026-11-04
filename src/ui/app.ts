@@ -363,6 +363,21 @@ export class App {
       case 'negotiate':
         A.negotiate(s, Number(a), b as 'pay' | 'share');
         break;
+      case 'enroll':
+        A.enroll(s, Number(a), b);
+        break;
+      case 'trainPause':
+        A.pauseEnrollment(s, Number(arg), true);
+        break;
+      case 'trainResume':
+        A.pauseEnrollment(s, Number(arg), false);
+        break;
+      case 'trainCancel':
+        A.cancelEnrollment(s, Number(arg));
+        break;
+      case 'expandTraining':
+        A.expandTraining(s);
+        break;
       case 'evChoose':
         A.chooseEvent(s, Number(a), b);
         break;

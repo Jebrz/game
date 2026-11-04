@@ -288,3 +288,11 @@ export function negotiate(s: GameState, depositId: number, kind: 'pay' | 'share'
   if (dep) grantPermitFor(s, dep, kind);
 }
 export { discoverNativeMine };
+
+// ---------- 培训 ----------
+export { canEnroll, canExpandTraining, cancelEnrollment, expandTraining, pauseEnrollment } from './training';
+import { enroll as enrollTrainee } from './training';
+export function enroll(s: GameState, passengerId: number, courseId: string): void {
+  const p = s.passengers.find((x) => x.id === passengerId);
+  if (p) enrollTrainee(s, p, courseId);
+}

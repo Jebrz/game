@@ -1,7 +1,8 @@
 // 存档：带版本号；整个世界状态（含小组行动、矿点占用、货舱批次、随机数状态）一起保存。
 
 import { SAVE_VERSION } from '../config/balance';
-import { CATASTROPHE, HANGAR, ROUTE, SHUTTLE_BUILD } from '../config/balance';
+import { CATASTROPHE, HANGAR, ROUTE, SHUTTLE_BUILD, TRAINING } from '../config/balance';
+import { initialQuals } from './training';
 import { advanceOver } from './catastrophe';
 import { RECIPES } from '../config/content';
 import type { GameState, ProcessJob, Shuttle } from './types';
@@ -21,12 +22,13 @@ export function serialize(s: GameState): string {
 export function deserialize(json: string): GameState {
   const f = JSON.parse(json) as SaveFile;
   if (!f || typeof f !== 'object' || !f.state) throw new Error('存档格式无效');
-  if (![1, 2, 3, 4, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
+  if (![1, 2, 3, 4, 5, SAVE_VERSION].includes(f.version)) throw new Error(`存档版本 ${f.version} 与当前版本 ${SAVE_VERSION} 不兼容`);
   let s = f.state;
   if (f.version === 1) s = migrateV1(s);
   if (f.version <= 2) s = migrateV2(s);
   if (f.version <= 3) s = migrateV3(s);
   if (f.version <= 4) s = migrateV4(s);
+  if (f.version <= 5) s = migrateV5(s);
   s.paused = true; // 读档后暂停，便于确认状态
   return s;
 }
@@ -212,5 +214,35 @@ export function migrateV4(old: GameState): GameState {
   }
   for (const sh of s.shuttles) sh.cargo.owed = sh.cargo.owed ?? {};
   s.version = 5;
+  return s;
+}
+
+/**
+ * v5 → v6：乘客培训与多职业资格。
+ * - 保留原技能、背景、小组与资产；资格按当前技能计算（与开局规则一致）。
+ * - 小组成员的名额按原背景职业记录（旧版本组队就是按背景）。
+ * - 年龄：旧名单都是成年人，按 30 岁记录。
+ */
+export function migrateV5(old: GameState): GameState {
+  const s = old as GameState & Record<string, unknown>;
+  for (const p of s.passengers) {
+    p.age = p.age ?? 30;
+    p.coursesDone = p.coursesDone ?? [];
+    p.courseProgress = p.courseProgress ?? {};
+    p.coursePaid = p.coursePaid ?? {};
+    if (!p.quals) p.quals = initialQuals(p);
+  }
+  for (const g of s.groups) {
+    if (!g.memberRoles) {
+      g.memberRoles = {};
+      for (const id of g.memberIds) {
+        const p = s.passengers.find((x) => x.id === id)!;
+        g.memberRoles[id] = p.profession;
+        if (!p.quals.includes(p.profession)) p.quals.push(p.profession); // 旧版已在组内担任该职业
+      }
+    }
+  }
+  s.training = s.training ?? { seats: TRAINING.baseSeats, level: 0, enrollments: [] };
+  s.version = 6;
   return s;
 }

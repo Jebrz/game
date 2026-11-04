@@ -3,7 +3,7 @@
 
 import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
 
-export const SAVE_VERSION = 5; // v5：探索事件、原住民关系与采矿许可；v4：动态小组；v3：多星球航线与灾变前锋；v2：运输机制造与机库（旧存档读取时自动升级）
+export const SAVE_VERSION = 6; // v6：乘客培训与多职业资格；v5：探索事件、原住民关系与采矿许可；v4：动态小组；v3：多星球航线与灾变前锋；v2：运输机制造与机库（旧存档读取时自动升级）
 
 export const TIME = {
   minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟
@@ -291,4 +291,43 @@ export const RELATION = {
   permitPaid: 4,
   shareStep: 1, // 每完成一次分享交付
   shareMax: 10, // 分享带来的关系提升上限
+};
+
+// ---------------- 乘客培训与职业资格（原型参数） ----------------
+// 职业资格：对应技能达到门槛即具备（背景职业不变）。医疗资格沿用医疗岗位门槛，本阶段不开放医疗课程。
+export const QUAL_SKILL = { pilot: 'piloting', surveyor: 'survey', miner: 'mining', engineer: 'engineering', medic: 'medical' } as const;
+export const QUAL_THRESHOLD: Record<keyof typeof QUAL_SKILL, number> = { pilot: 40, surveyor: 35, miner: 35, engineer: 40, medic: 40 };
+export const FIELD_MIN_AGE = 18; // 未成年人不得承担出勤岗位或参加出勤课程
+
+export interface CourseDef {
+  id: string;
+  prof: 'pilot' | 'surveyor' | 'miner' | 'engineer';
+  label: string;
+  gain: number; // 课程总提升（逐分钟获得，取消后保留已得部分）
+  time: number; // 标准时长（分钟）
+  cost: Partial<Record<ItemId, number>>; // 每人每课程只付一次
+  unlock: string;
+}
+
+export const COURSES: CourseDef[] = [
+  { id: 'pilotBasic', prof: 'pilot', label: '驾驶基础', gain: 22, time: 300, cost: { propellant: 12, energy: 20 }, unlock: '可在出勤小组担任驾驶员' },
+  { id: 'surveyBasic', prof: 'surveyor', label: '勘探基础', gain: 20, time: 240, cost: { energy: 25 }, unlock: '可在出勤小组担任勘探员' },
+  { id: 'miningBasic', prof: 'miner', label: '采掘基础', gain: 22, time: 240, cost: { iron: 6, energy: 20 }, unlock: '可在出勤小组担任采掘工' },
+  { id: 'engBasic', prof: 'engineer', label: '工程基础', gain: 20, time: 300, cost: { parts: 1, energy: 20 }, unlock: '可在出勤小组担任工程师（列车岗位仍按背景分配）' },
+];
+
+export const TRAINING = {
+  baseSeats: 2, // 原型起始配置：科研医疗车 2 个基础培训位
+  expansions: [{ add: 2, items: { parts: 3, iron: 12 } as Partial<Record<ItemId, number>>, time: 60, label: '培训位扩建' }],
+  mentorMin: 55, // 导师所需技能
+  perMentor: 2, // 每名导师同时最多带教人数
+  minHealth: 50, // 报名与持续培训所需健康
+  maxFatigue: 70, // 报名所需疲劳上限
+  pauseFatigue: 85, // 疲劳高于此值自动暂停
+  pauseHealth: 40,
+  fatigueHour: 2, // 学员每小时疲劳（不工作但学习）
+  energyHour: 3, // 每名在训学员每小时耗能
+  // 在岗学习：只提升已有资格的技能，仅在实际执行对应工作时；越高越慢；上限
+  onJob: { pilot: 0.004, surveyor: 0.008, miner: 0.005, engineer: 0.002 },
+  onJobCap: 75,
 };

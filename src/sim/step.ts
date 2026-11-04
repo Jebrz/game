@@ -4,6 +4,7 @@ import { STATION } from '../config/balance';
 import { tickCatastrophe } from './catastrophe';
 import { tickClaims } from './claims';
 import { tickJourney } from './journey';
+import { tickTraining } from './training';
 import { tickPermits } from './natives';
 import { tryFormNewGroup } from './groups';
 import { tickGroups } from './groupAI';
@@ -18,6 +19,7 @@ export function step(s: GameState): void {
   tickProcessing(s);
   tickDriveRepair(s);
   tickResearch(s);
+  tickTraining(s); // 列车内的培训在星球、航行与停泊期间都可进行
   if (s.phase === 'planet') {
     tickScan(s);
     tickClaims(s);

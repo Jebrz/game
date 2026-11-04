@@ -1,12 +1,13 @@
 // 侧边详细面板（每个标签一个函数，返回 HTML）
 
-import { DEMAND_BONUS, EVENT_DEFS, GENE, GROUP_ORDER, GROUPS, RELATION, ROBOTS, ROUTE, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
+import { COURSES, FIELD_MIN_AGE, QUAL_THRESHOLD, TRAINING, DEMAND_BONUS, EVENT_DEFS, GENE, GROUP_ORDER, GROUPS, RELATION, ROBOTS, ROUTE, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
 import { canExpandHangar, canOrderShuttle, hangarUsage, itemListText, jobLabel, jobSource, nextExpansion, QUEUE_MAX, refundText } from '../sim/hangar';
 import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INFO, RAW_IDS, RECIPES, RESEARCH } from '../config/content';
 import * as A from '../sim/actions';
 import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
 import { mineralStatus, nextLegFuel } from '../sim/objectives';
 import { checkNewGroup } from '../sim/groups';
+import { canEnroll, canExpandTraining, cancelText, course, enrollmentOf, isMentoring, mentorLoad, mentorsFor, nextTrainingExpansion, seatsUsed, skillOfCourse } from '../sim/training';
 import { activePermit, ATTITUDE_LABEL, attitude, depositAccess, hasTranslation, permitTerms, tradeText } from '../sim/natives';
 import { DEFER_TEXT, eventOptions, optionSummary } from '../sim/events';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
@@ -18,15 +19,16 @@ import { cargoCap, cargoUsed, fuelPerKm, speed, tank } from '../sim/shuttles';
 import { deptStats, processingSpeed } from '../sim/staff';
 import { deterrence, moodFactors, moodSummary } from '../sim/survival';
 import { recipeOutputs } from '../sim/train';
-import type { GameState, ItemId, Passenger, Profession, RawId, Shuttle, TrainDept } from '../sim/types';
+import type { GameState, ItemId, Passenger, Profession, RawId, Shuttle, SkillId, TrainDept } from '../sim/types';
 import { bar, btn, esc, sbtn } from './html';
 
-export type TabId = 'train' | 'route' | 'events' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
+export type TabId = 'train' | 'route' | 'events' | 'training' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: 'train', label: '列车' },
   { id: 'route', label: '航线' },
   { id: 'events', label: '事件' },
+  { id: 'training', label: '培训' },
   { id: 'groups', label: '小组' },
   { id: 'shuttles', label: '运输机' },
   { id: 'industry', label: '库存加工' },
@@ -49,6 +51,8 @@ export function renderPanel(s: GameState, tab: TabId): string {
       return routePanel(s);
     case 'events':
       return eventsPanel(s);
+    case 'training':
+      return trainingPanel(s);
     case 'groups':
       return groupsPanel(s);
     case 'shuttles':
@@ -133,7 +137,7 @@ function groupsPanel(s: GameState): string {
   h += `<div>空闲可出勤人员（已扣除列车必需人手）：${profs0.map((p) => `${PROFESSION_INFO[p].label} ${fc.available[p] ?? 0}`).join('、')}</div>`;
   h += fc.ok
     ? `<div class="ok">条件已满足：新小组将在 10 分钟内自动成立并领取公共备用机。</div>`
-    : `<div>新小组：<span class="why">暂无法成立——${esc(fc.reasons.join('；'))}</span></div>`;
+    : `<div>新小组：<span class="why">暂无法成立——${esc(fc.reasons.join('；'))}</span></div>${fc.reasons.some((r) => /缺(驾驶员|勘探员|采掘工|工程师)/.test(r)) ? `<div class="row">${sbtn('查看培训课程', 'tab', 'training', '', 'primary')}</div>` : ''}`;
   h += `<div class="note">有公共备用机、且空闲乘客满足下方职业要求时，乘客会自动组成新组、推选组长并领取备用机，不需要审批。不会占用列车长座机、小组私有备用机或已预约换装的运输机；保留列车最低运营人手（工程 2、后勤 2、医疗 1）。新组贡献点从 0 开始。</div>`;
   h += `<h3>出勤小组编组要求</h3><div class="note">列车长规定每组职业人数；所有小组按同一要求增量调整：只释放多出的人、补充缺少的人，小组的贡献点、运输机与历史不变。负责人与列车必需岗位不参与出勤，一人只属于一个小组。出勤中的小组返回后再调整。</div>`;
   const profs: Profession[] = ['pilot', 'surveyor', 'miner', 'engineer', 'medic'];
@@ -528,6 +532,83 @@ function eventsPanel(s: GameState): string {
   }
   const hist = s.events.filter((e) => !['pending', 'assigned', 'active'].includes(e.status));
   if (hist.length) h += `<h4>事件记录</h4><ul class="plain">${hist.map((e) => `<li>${esc(e.planetName)} · ${esc(e.title)}：${EV_STATUS[e.status]}。${esc(e.result)}</li>`).join('')}</ul>`;
+  return h;
+}
+
+
+// ---------------- 培训 ----------------
+const SKILL_SHORT: [SkillId, string][] = [['piloting', '驾驶'], ['survey', '勘探'], ['mining', '采掘'], ['engineering', '工程']];
+
+function currentPost(s: GameState, p: Passenger): string {
+  if (p.isCaptain) return '列车长';
+  if (p.leftBehind) return '遗留星球';
+  const e = enrollmentOf(s, p);
+  if (e && !e.manualPause) return `脱产：${course(e.courseId).label}`;
+  if (isMentoring(s, p)) return '授课导师';
+  if (p.groupId != null) {
+    const g = s.groups.find((x) => x.id === p.groupId)!;
+    return `${g.name}·${PROFESSION_INFO[g.memberRoles[p.id] ?? p.profession].label}`;
+  }
+  if (p.headRole) return HEAD_INFO[p.headRole].label;
+  const ds = deptStats(s);
+  for (const d of Object.keys(ds) as TrainDept[]) if (ds[d].workers.includes(p)) return `${DEPT_INFO[d].label}岗位`;
+  return '休息/恢复';
+}
+
+function trainingPanel(s: GameState): string {
+  const T = s.training;
+  let h = `<h3>培训设施（科研医疗车）</h3><div>培训位 <b>${seatsUsed(s)}/${T.seats}</b>（原型起始配置 ${TRAINING.baseSeats} 个）</div>`;
+  const x = nextTrainingExpansion(s);
+  if (x) {
+    const w = canExpandTraining(s);
+    h += `<div class="row">${sbtn(`${x.label}（+${x.add}）`, 'expandTraining', '', w.join('；'))}<span class="note">${esc(itemListText(x.items))} · 标准工时 ${x.time} 分（生产队列）</span></div>${w.length ? `<div class="why">${esc(w.join('；'))}</div>` : ''}`;
+  } else h += `<div class="note">培训位已扩建到本阶段上限。</div>`;
+  h += `<div class="note">规则：导师需对应技能 ≥ ${TRAINING.mentorMin}，每人同时最多带 ${TRAINING.perMentor} 名学员；学员与授课中的导师都不提供原岗位产能，若是小组成员该组暂不可出勤。每名在训学员耗能 ${TRAINING.energyHour} kWh/小时。材料每人每课程只付一次；技能逐分钟获得，取消后保留已得部分，重报从原进度继续、不再收费；尚无进度时取消可原样退还。未满 ${FIELD_MIN_AGE} 岁、负责人和列车最低运营人员不参加出勤课程。医疗等严格资格本阶段不开放。</div>`;
+
+  h += `<h3>培训中（${T.enrollments.length}）</h3>`;
+  if (!T.enrollments.length) h += `<div class="note">暂无。</div>`;
+  for (const e of T.enrollments) {
+    const p = s.passengers.find((q) => q.id === e.traineeId)!;
+    const c = course(e.courseId);
+    const prog = p.courseProgress[c.id] ?? 0;
+    const m = s.passengers.find((q) => q.id === e.mentorId);
+    const status = e.manualPause ? '手动暂停（学员回原岗位，导师已释放，培训位保留）' : e.pauseReason ? `自动暂停：${e.pauseReason}` : '进行中';
+    h += `<div class="card"><div class="head"><b>${esc(p.name)} · ${c.label}</b><span>${fmt(prog * 100)}%</span></div>${bar(prog, 'warm')}`;
+    h += `<div>${PROFESSION_INFO[c.prof].label}技能 ${fmt(skillOfCourse(p, c), 1)} / 门槛 ${QUAL_THRESHOLD[c.prof]} · 导师：${m ? esc(m.name) : '—'} · 预计还需 ${fmtTime((1 - prog) * c.time)}（不含暂停）</div>`;
+    h += `<div class="${e.pauseReason || e.manualPause ? 'why' : 'ok'}">${esc(status)}</div>`;
+    h += `<div class="row">${e.manualPause ? sbtn('继续', 'trainResume', e.id) : sbtn('暂停', 'trainPause', e.id)} ${sbtn('取消', 'trainCancel', e.id)}<span class="note">取消：${esc(cancelText(s, e))}</span></div></div>`;
+  }
+
+  h += `<h3>课程</h3>`;
+  for (const c of COURSES) {
+    const ms = mentorsFor(s, c);
+    const cands = s.passengers.filter((p) => !p.isCaptain && !p.leftBehind);
+    const ok = cands.filter((p) => !canEnroll(s, p, c.id).length).sort((a, b) => skillOfCourse(b, c) - skillOfCourse(a, c));
+    const reasonsCount = new Map<string, number>();
+    for (const p of cands) {
+      const r = canEnroll(s, p, c.id);
+      if (r.length) reasonsCount.set(r[0].replace(/[\d.]+/g, 'N'), (reasonsCount.get(r[0].replace(/[\d.]+/g, 'N')) ?? 0) + 1);
+    }
+    h += `<div class="card"><div class="head"><b>${c.label} → ${PROFESSION_INFO[c.prof].label}</b><span>${fmtTime(c.time)}</span></div>`;
+    h += `<div>门槛：${PROFESSION_INFO[c.prof].label}技能 ≥ ${QUAL_THRESHOLD[c.prof]}；课程提升 +${c.gain}（报名者需能在一期内达标）</div>`;
+    h += `<div>成本：${esc(itemListText(c.cost))}（每人只付一次）＋ 导师授课时间；完成后：${esc(c.unlock)}</div>`;
+    h += `<div>导师（${PROFESSION_INFO[c.prof].label}技能 ≥ ${TRAINING.mentorMin}）：${ms.all.length ? ms.all.map((m) => `${esc(m.name)}${ms.available.includes(m) ? `（可带 ${TRAINING.perMentor - mentorLoad(s, m)}）` : '（不可用）'}`).join('、') : '<span class="badtext">列车上没有合格导师，本课程暂不可用</span>'}</div>`;
+    h += `<div class="note">脱产期间失去：学员原岗位产能；导师原岗位产能；若为小组成员，该组暂停出勤。</div>`;
+    if (ok.length) {
+      h += `<table><tr><th>可报名</th><th>背景/当前</th><th class="num">技能</th><th></th></tr>${ok
+        .slice(0, 6)
+        .map((p) => `<tr><td>${esc(p.name)}</td><td>${PROFESSION_INFO[p.profession].label} / ${esc(currentPost(s, p))}</td><td class="num">${fmt(skillOfCourse(p, c))}</td><td>${sbtn('安排', 'enroll', `${p.id}:${c.id}`)}</td></tr>`)
+        .join('')}</table>`;
+    } else h += `<div class="why">当前没有可报名的人。</div>`;
+    if (reasonsCount.size) h += `<div class="note">其他人不可报名的主要原因：${[...reasonsCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([r, n]) => `${esc(r)}（${n} 人）`).join('；')}</div>`;
+    h += `</div>`;
+  }
+
+  h += `<h3>人员与资格</h3><table><tr><th>姓名</th><th>背景</th><th>当前岗位</th><th>资格</th>${SKILL_SHORT.map(([, l]) => `<th class="num">${l}</th>`).join('')}</tr>`;
+  for (const p of s.passengers.filter((q) => !q.isCaptain && !q.leftBehind)) {
+    h += `<tr><td>${esc(p.name)}${p.age < FIELD_MIN_AGE ? '<span class="tag">未成年</span>' : ''}</td><td>${PROFESSION_INFO[p.profession].label}</td><td>${esc(currentPost(s, p))}</td><td>${p.quals.map((q) => PROFESSION_INFO[q].label).join('、') || '—'}</td>${SKILL_SHORT.map(([k]) => `<td class="num">${fmt(p.skills[k])}</td>`).join('')}</tr>`;
+  }
+  h += `</table><div class="note">背景职业不变；资格由技能达到门槛取得。在岗学习：小组成员执行驾驶、勘探、采掘，工程人员参与加工时，已具备资格的技能会缓慢提升（上限 ${TRAINING.onJobCap}），不会因此获得新资格。</div>`;
   return h;
 }
 

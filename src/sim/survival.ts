@@ -1,6 +1,7 @@
 // 基础生存：食物、氧气、能源、疲劳、健康；情绪（士气 / 失望 / 敌意）
 
-import { GENE, MOOD, ROBOTS, SURVIVAL } from '../config/balance';
+import { GENE, MOOD, ROBOTS, SURVIVAL, TRAINING } from '../config/balance';
+import { enrollmentOf, isTraining } from './training';
 import { clamp, log, onBoardPeople } from './core';
 import { stage } from './catastrophe';
 import { deptStats } from './staff';
@@ -50,6 +51,7 @@ export function tickPeopleHourly(s: GameState): void {
     if (p.leftBehind) continue;
     const geneFat = p.genes.includes(GENE.id) ? 0.8 : 1;
     if (!p.aboard) p.fatigue += SURVIVAL.fieldFatigueHour * geneFat;
+    else if (isTraining(s, p) && !enrollmentOf(s, p)!.pauseReason) p.fatigue += TRAINING.fatigueHour; // 学习也会累
     else if (working.has(p.id)) p.fatigue += SURVIVAL.fatigueHour[s.policies.workload] * (SURVIVAL.fatigueHour[s.policies.workload] > 0 ? geneFat : 1);
     else p.fatigue += SURVIVAL.restFatigueHour;
     p.fatigue = clamp(p.fatigue, 0, 100);

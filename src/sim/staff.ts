@@ -4,6 +4,7 @@ import { SURVIVAL } from '../config/balance';
 import { DEPT_INFO, HEAD_INFO, PROFESSION_INFO } from '../config/content';
 import { clamp } from './core';
 import type { GameState, Passenger, TrainDept } from './types';
+import { isMentoring, isTraining } from './training';
 
 export function deptOf(p: Passenger): TrainDept | null {
   if (p.isCaptain) return null;
@@ -16,6 +17,7 @@ export function isWorking(s: GameState, p: Passenger): boolean {
   if (p.isCaptain || p.leftBehind || !p.aboard) return false;
   if (p.groupId != null) return false; // 小组成员在车上时休整
   if (p.recoveringUntil > s.time) return false;
+  if (isTraining(s, p) || isMentoring(s, p)) return false; // 脱产学员与授课导师不提供原岗位产能
   return true;
 }
 
