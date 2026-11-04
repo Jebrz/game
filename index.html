@@ -3,15 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>暗影地牢</title>
-    <style>
-      html, body { margin: 0; height: 100%; background: #07060b; overflow: hidden; }
-      #game { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-      canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
-    </style>
+    <title>星空列车</title>
   </head>
   <body>
-    <div id="game"></div>
+    <div id="app">
+      <header id="topbar"></header>
+      <main id="main">
+        <section id="view">
+          <nav id="viewtabs">
+            <button data-view="train" class="on">列车剖视 <kbd>T</kbd></button>
+            <button data-view="map">星球地图 <kbd>M</kbd></button>
+          </nav>
+          <canvas id="canvas"></canvas>
+          <div id="objectives"></div>
+          <div id="tooltip" hidden></div>
+        </section>
+        <aside id="side">
+          <nav id="sidetabs"></nav>
+          <div id="panel"></div>
+        </aside>
+      </main>
+      <footer id="log"></footer>
+      <div id="toasts"></div>
+      <div id="modal" hidden></div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

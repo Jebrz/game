@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite';
 
-// GitHub Pages 项目站点部署在 https://<用户>.github.io/game/ 下，
-// 因此构建产物使用 /game/ 作为基础路径；本地开发仍使用根路径。
+// 星空列车试玩版部署在 GitHub Pages 子路径 /game/star-train/（原地下城仍在 /game/）。
+// 可用环境变量 BASE_PATH 覆盖；本地开发使用根路径。
+const base = process.env.BASE_PATH || '/game/star-train/';
+
 export default defineConfig(({ command, isPreview }) => ({
-  base: command === 'build' || isPreview ? '/game/' : '/',
+  base: command === 'build' || isPreview ? base : '/',
   build: {
     chunkSizeWarningLimit: 2000,
   },
