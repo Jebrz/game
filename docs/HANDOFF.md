@@ -17,8 +17,9 @@
 
 ## 2. 线上部署（实际核对结果）
 
-- 星空列车：https://jebrz.github.io/game/star-train/ ，线上脚本 `assets/index-D0h2rYRx.js`，与本地构建 `bb5b38d` 完全一致（部署运行 41873066477 成功）。
-- 地下城：https://jebrz.github.io/game/ ，脚本 `assets/index-1VxXLNq2.js`（提交 `59092fa`），未变。
+- 星空列车：https://jebrz.github.io/game/star-train/ ，线上脚本 `assets/index-B0rD_j9c.js`（样式 `index-CTvnouhD.css`），与本地构建 `8ce5998` 的 `dist/index.html` 一致（部署运行 41878020908：build / deploy / verify 均成功，verify 日志列出上述文件 200）。之后只改文档的提交不改变脚本文件名。
+- 地下城：https://jebrz.github.io/game/ ，脚本 `assets/index-1VxXLNq2.js`（提交 `59092fa`），未变（同一运行的逐字节核对与 verify 均通过）。
+- 说明：本会话容器的代理拒绝直接访问 jebrz.github.io（403），线上核对以工作流 verify 日志为准。
 - `72eee48` 的部署在「类型检查 + 测试」步骤失败，未发布（预期行为：保护检查生效）。
 - 部署工作流 `.github/workflows/deploy.yml`：推送本分支即触发；同时构建地下城（固定 `59092fa`）与星空列车，部署前逐字节核对线上地下城文件，不一致则中止；部署后检查两个地址及资源 200。GitHub 托管 runner 有时排队 15～40 分钟，属正常，不要重复触发。
 - 若有人从 `claude/serene-ritchie-qv18mk` 运行旧工作流，会只发布地下城、`/game/star-train/` 暂时消失；重新运行本分支工作流即可恢复。
