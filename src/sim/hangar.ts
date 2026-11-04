@@ -121,6 +121,22 @@ export function cancelOrder(s: GameState, jobId: number, by: 'captain' | number)
   return '';
 }
 
+/** 列车长把一项公共订单提到队首（被挤下的订单保留已完成工时）；小组订单不能被列车长调整 */
+export function canMoveToFront(s: GameState, jobId: number): string {
+  const i = s.queue.findIndex((j) => j.id === jobId);
+  if (i < 0) return '订单不存在';
+  if (i === 0) return '已在队首';
+  if (s.queue[i].orderedBy != null) return '小组订单按下单顺序排在公共订单之后';
+  return '';
+}
+
+export function moveToFront(s: GameState, jobId: number): void {
+  if (canMoveToFront(s, jobId)) return;
+  const i = s.queue.findIndex((j) => j.id === jobId);
+  const [job] = s.queue.splice(i, 1);
+  s.queue.unshift(job);
+}
+
 // ---------------- 制造订单 ----------------
 
 export function canOrderShuttle(s: GameState, g: Group | null): string[] {

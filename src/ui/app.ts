@@ -361,6 +361,9 @@ export class App {
       case 'releaseShuttle':
         A.releaseShuttle(s, Number(arg));
         break;
+      case 'moveFront':
+        A.moveToFront(s, Number(arg));
+        break;
       case 'orderShuttle':
         A.captainOrderShuttle(s);
         break;

@@ -266,13 +266,13 @@ function industryPanel(s: GameState): string {
 /** 共享生产队列（加工配方、运输机制造、机库扩建） */
 export function queueHtml(s: GameState): string {
   const spd = processingSpeed(s);
-  let h = `<h4>共享生产队列（${s.queue.length}/${QUEUE_MAX}）</h4><div class="note">一次只推进第一项；公共订单排在小组订单之前，被插队的小组订单保留已完成工时。加工速度 ×${fmt(spd, 2)}。</div>`;
+  let h = `<h4>共享生产队列（${s.queue.length}/${QUEUE_MAX}）</h4><div class="note">一次只推进第一项；公共订单排在小组订单之前，可用「提前」把公共订单移到队首，被挤下的订单保留已完成工时。加工速度 ×${fmt(spd, 2)}。</div>`;
   if (!s.queue.length) return h + `<div class="note">空闲</div>`;
   h += `<table><tr><th></th><th>项目</th><th>来源</th><th class="num">剩余</th><th></th></tr>`;
   s.queue.forEach((j, i) => {
     const prog = 1 - j.remaining / j.total;
     const cancelWhy = j.orderedBy != null ? '小组出资的订单只能由该小组取消' : '';
-    h += `<tr><td>${i === 0 ? '▶' : i + 1}</td><td>${esc(jobLabel(j))}${j.kind !== 'recipe' || i === 0 ? bar(prog, 'warm') : ''}</td><td>${esc(jobSource(s, j))}</td><td class="num">约 ${fmtTime(j.remaining / Math.max(0.2, spd))}${j.started && i !== 0 ? '<br><span class="note">已暂停</span>' : ''}</td><td>${sbtn('取消', 'cancelJob', j.id, cancelWhy)}${j.kind !== 'recipe' && !cancelWhy ? `<br><span class="note">${esc(refundText(j))}</span>` : ''}</td></tr>`;
+    h += `<tr><td>${i === 0 ? '▶' : i + 1}</td><td>${esc(jobLabel(j))}${j.kind !== 'recipe' || i === 0 ? bar(prog, 'warm') : ''}</td><td>${esc(jobSource(s, j))}</td><td class="num">约 ${fmtTime(j.remaining / Math.max(0.2, spd))}${j.started && i !== 0 ? '<br><span class="note">已暂停</span>' : ''}</td><td>${i > 0 && j.orderedBy == null ? sbtn('提前', 'moveFront', j.id, A.canMoveToFront(s, j.id)) + ' ' : ''}${sbtn('取消', 'cancelJob', j.id, cancelWhy)}${j.kind !== 'recipe' && !cancelWhy ? `<br><span class="note">${esc(refundText(j))}</span>` : ''}</td></tr>`;
   });
   h += `</table><div class="note">取消规则：原样返还下单时扣除的材料与贡献点，不会多返；已消耗的能源与工时不退。</div>`;
   if (s.inventory.energy < 1) h += `<div class="badtext">能源耗尽，生产线暂停</div>`;

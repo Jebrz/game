@@ -131,6 +131,30 @@ describe('列车长公共制造', () => {
   });
 });
 
+describe('队列优先', () => {
+  it('列车长可把公共订单提前，被挤下的订单保留进度；不能调整小组订单', () => {
+    const s = rich();
+    s.inventory.crystal = 30;
+    s.inventory.ice = 10;
+    s.hangar.capacity = 5;
+    A.captainOrderShuttle(s);
+    for (let i = 0; i < 20; i++) step(s);
+    const progressed = s.queue[0].remaining;
+    A.enqueue(s, 'trainFuel', 1);
+    const fuelId = s.queue[1].id;
+    A.moveToFront(s, fuelId);
+    expect(s.queue[0].id).toBe(fuelId);
+    expect(s.queue[1].remaining).toBe(progressed);
+    const g = s.groups[0];
+    g.points = 500;
+    orderShuttle(s, g, '测试');
+    const gid = s.queue[s.queue.length - 1].id;
+    expect(A.canMoveToFront(s, gid)).toContain('小组订单');
+    A.moveToFront(s, gid);
+    expect(s.queue[s.queue.length - 1].id).toBe(gid);
+  });
+});
+
 describe('取消订单', () => {
   it('原样返还材料，部分完成后取消也不会多返；不能重复取消', () => {
     const s = rich();

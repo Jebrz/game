@@ -82,7 +82,7 @@ export function captainSwap(s: GameState, groupId: number, shId: number): void {
   const sh = s.shuttles.find((x) => x.id === shId);
   if (g && sh) swapShuttle(s, g, sh, 'captain', '');
 }
-export { assignCaptain, canAssignCaptain, canExpandHangar, canOrderShuttle, canSwap, expandHangar, releaseShuttle } from './hangar';
+export { assignCaptain, canAssignCaptain, canExpandHangar, canMoveToFront, canOrderShuttle, canSwap, expandHangar, moveToFront, releaseShuttle } from './hangar';
 
 // ---------- 主驱动 ----------
 export function canRepairDrive(s: GameState): string {
