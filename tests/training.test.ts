@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { COURSES, QUAL_THRESHOLD, TRAINING } from '../src/config/balance';
 import * as A from '../src/sim/actions';
 import { advance } from '../src/sim/clock';
-import { checkNewGroup, isHome, reservedForTrain } from '../src/sim/groups';
+import { checkNewGroup, reservedForTrain } from '../src/sim/groups';
 import { deserialize, serialize } from '../src/sim/save';
 import { deptStats } from '../src/sim/staff';
 import { createInitialState } from '../src/sim/state';
@@ -18,10 +18,6 @@ function started(seed = 3): GameState {
   A.startGame(s);
   s.inventory = { ...s.inventory, parts: 30, iron: 100, copper: 40, crystal: 30 };
   return s;
-}
-
-function waitHome(s: GameState, max = 800): void {
-  for (let i = 0; i < max && s.groups.some((g) => !isHome(g) || g.state === 'unloading'); i++) step(s);
 }
 
 /** 可报名采掘基础的人（按界面列出的顺序：技能高者优先） */
