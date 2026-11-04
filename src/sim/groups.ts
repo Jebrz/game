@@ -124,7 +124,8 @@ export function reformGroups(s: GameState): void {
     }
   }
   const summary = s.groups.map((g) => `${g.name}${g.missing.length ? `（缺 ${g.missing.join('、')}）` : `（${g.memberIds.length}人）`}`);
-  log(s, 'group', `按职业要求调整编组：${changes.length ? changes.join('；') + '。' : '人员无变动。'}现状：${summary.join('，')}`);
+  const pending = s.groups.filter((g) => g.pendingReform).map((g) => g.name);
+  log(s, 'group', `按职业要求调整编组：${changes.length ? changes.join('；') + '。' : '在列车上的小组人员无变动。'}${pending.length ? `${pending.join('、')}出勤中，返航后再调整。` : ''}现状：${summary.join('，')}`);
 }
 
 // ---------------- 动态新增小组 ----------------
