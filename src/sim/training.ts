@@ -4,15 +4,18 @@
 // - 背景职业不变；职业资格 = 对应技能达到门槛。组队按资格，一人在组内只占一个名额。
 // - 脱产培训：需要培训位与合格导师（技能 ≥ 55，每人最多同时带 2 人）。学员与授课中的导师都不提供原岗位产能、不能出勤。
 // - 材料每人每课程只付一次；技能逐分钟获得，取消后保留已得部分，重报从原进度继续，不会重复领取。尚无进度时取消可原样退还。
-// - 自动暂停：学员疲劳过高/健康过低、没有可用导师、能源不足。条件恢复后自动继续。手动暂停：学员回到原岗位，导师释放，名额保留。
+// - 自动暂停：学员疲劳过高/健康过低、能源不足。条件恢复后自动继续。手动暂停：学员回到原岗位，导师释放，名额保留。
+// - 等待导师：合格导师都在出勤或带教已满时也可报名（材料照付、占培训位），学员先回原岗位工作；
+//   出勤小组中的合格导师回到列车（未在卸货）时离组留车授课，小组空缺由空闲合格人员递补，无人递补则显示缺口。
+//   导师不是凭空生成的，授课期间不提供原岗位产能也不出勤；授课结束后成为空闲人员，可递补或加入新组。
 // - 在岗学习：只提升已具备资格的技能，且只在实际执行对应工作时；不会获得新资格。
 // - 未成年人、负责人、列车长不参加出勤课程；不能抽走列车最低运营人员。
 
 import { COURSES, FIELD_MIN_AGE, QUAL_SKILL, QUAL_THRESHOLD, TRAINING, type CourseDef } from '../config/balance';
 import { PROFESSION_INFO } from '../config/content';
 import { add, consume, costText, fmt, log, missingItems, newId } from './core';
-import { isHome, reservedForTrain } from './groups';
-import { insertJob, QUEUE_MAX } from './hangar';
+import { canRefill, isHome, releaseMember, reservedForTrain } from './groups';
+import { insertJob, materialBlocks, QUEUE_MAX } from './hangar';
 import type { Enrollment, GameState, Passenger, Profession } from './types';
 
 export function hasQual(p: Passenger, prof: Profession): boolean {
@@ -40,10 +43,22 @@ export function enrollmentOf(s: GameState, p: Passenger): Enrollment | null {
   return s.training.enrollments.find((e) => e.traineeId === p.id) ?? null;
 }
 
-/** 学员脱产中（未手动暂停）：不工作、不出勤 */
-export function isTraining(s: GameState, p: Passenger): boolean {
+/** 等待导师状态（旧存档的「没有可用导师」暂停原因也视为等待导师） */
+export const MENTOR_WAIT = '等待导师：合格导师出勤中或带教已满，导师回到列车后留车授课';
+export function waitingMentor(e: Enrollment): boolean {
+  return !e.manualPause && (e.pauseReason === MENTOR_WAIT || e.pauseReason.startsWith('没有可用导师'));
+}
+
+/** 已报名且未手动暂停（含等待导师）：不加入出勤小组 */
+export function inCourse(s: GameState, p: Passenger): boolean {
   const e = enrollmentOf(s, p);
   return !!e && !e.manualPause;
+}
+
+/** 学员脱产中（未手动暂停、不在等待导师）：不工作、不出勤。等待导师期间学员在原岗位工作。 */
+export function isTraining(s: GameState, p: Passenger): boolean {
+  const e = enrollmentOf(s, p);
+  return !!e && !e.manualPause && !waitingMentor(e);
 }
 
 /** 导师正在授课：不工作、不出勤 */
@@ -69,6 +84,37 @@ export function mentorsFor(s: GameState, c: CourseDef, exclude?: number): { avai
   };
   const available = all.filter(ok).sort((a, b) => (a.groupId == null ? 0 : 1) - (b.groupId == null ? 0 : 1) || mentorLoad(s, a) - mentorLoad(s, b));
   return { available, busy: all.filter((p) => !ok(p)), all };
+}
+
+/** 合格导师中，出勤在外或正在卸货、之后可留车授课的人（不含带教已满者） */
+export function mentorsAway(s: GameState, c: CourseDef, exclude?: number): Passenger[] {
+  const { available, all } = mentorsFor(s, c, exclude);
+  return all.filter((p) => !available.includes(p) && p.groupId != null && !enrollmentOf(s, p) && mentorLoad(s, p) < TRAINING.perMentor);
+}
+
+/**
+ * 为课程挑选导师：优先列车上的非小组人员；其次在列车上的小组成员（优先其空缺能被递补的），
+ * 小组成员担任导师时离组留车授课，空缺按编组规则递补。
+ */
+function assignMentor(s: GameState, e: Enrollment, c: CourseDef): Passenger | null {
+  const avail = mentorsFor(s, c, e.traineeId).available;
+  if (!avail.length) return null;
+  const score = (p: Passenger) => {
+    if (p.groupId == null) return 0;
+    const g = s.groups.find((x) => x.id === p.groupId);
+    const role = g?.memberRoles[p.id] ?? p.profession;
+    return canRefill(s, role) ? 1 : 2;
+  };
+  const m = [...avail].sort((a, b) => score(a) - score(b) || mentorLoad(s, a) - mentorLoad(s, b))[0];
+  e.mentorId = m.id;
+  const g = m.groupId != null ? s.groups.find((x) => x.id === m.groupId) : undefined;
+  if (g) {
+    const role = PROFESSION_INFO[g.memberRoles[m.id] ?? m.profession].label;
+    const r = releaseMember(s, g, m);
+    const t = s.passengers.find((x) => x.id === e.traineeId)!;
+    log(s, 'group', `${m.name}离开${g.name}，留车担任${t.name}「${c.label}」的导师（授课结束后成为空闲人员）。${r.added.length ? `${g.name}由 ${r.added.join('、')} 递补${role}名额。` : `${g.name}暂缺${r.missing.join('、') || role}，无人可递补；可降低职业要求或待人员空闲后递补。`}`);
+  }
+  return m;
 }
 
 export function seatsUsed(s: GameState): number {
@@ -100,9 +146,10 @@ export function canEnroll(s: GameState, p: Passenger, courseId: string): string[
   if (p.recoveringUntil > s.time) r.push('基因强化恢复中');
   if (reservedForTrain(s).has(p.id)) r.push(`需保留为列车最低运营人员（${PROFESSION_INFO[p.profession].label}）`);
   if (seatsUsed(s) >= s.training.seats) r.push(`培训位已满（${seatsUsed(s)}/${s.training.seats}）`);
-  if (!mentorsFor(s, c, p.id).available.length) r.push(`没有可用导师（需${PROFESSION_INFO[c.prof].label}技能 ≥ ${TRAINING.mentorMin}，且在列车上、未超带教上限）`);
+  const ms = mentorsFor(s, c, p.id);
+  if (!ms.available.length && !mentorsAway(s, c, p.id).length) r.push(ms.all.length ? `没有可用导师（合格导师均在培训或带教已满）` : `没有合格导师（需${PROFESSION_INFO[c.prof].label}技能 ≥ ${TRAINING.mentorMin}）`);
   if (!p.coursePaid[c.id]) {
-    const miss = missingItems(s.inventory, c.cost);
+    const miss = materialBlocks(s, c.cost);
     if (miss.length) r.push(`材料不足：${miss.join('、')}`);
   }
   return r;
@@ -111,15 +158,21 @@ export function canEnroll(s: GameState, p: Passenger, courseId: string): string[
 export function enroll(s: GameState, p: Passenger, courseId: string): Enrollment | null {
   if (canEnroll(s, p, courseId).length) return null;
   const c = course(courseId);
-  const mentor = mentorsFor(s, c, p.id).available[0];
   const paidNow = !p.coursePaid[c.id];
   if (paidNow) {
     consume(s.inventory, c.cost);
     p.coursePaid[c.id] = true;
   }
-  const e: Enrollment = { id: newId(s), courseId, traineeId: p.id, mentorId: mentor.id, startedAt: s.time, manualPause: false, pauseReason: '', skillStart: skillOfCourse(p, c) };
+  const e: Enrollment = { id: newId(s), courseId, traineeId: p.id, mentorId: null, startedAt: s.time, manualPause: false, pauseReason: '', skillStart: skillOfCourse(p, c) };
   s.training.enrollments.push(e);
-  log(s, 'research', `${p.name}开始「${c.label}」脱产培训（导师 ${mentor.name}${paidNow ? `，消耗 ${costText(c.cost)}` : '，从上次进度继续，不再收费'}）。当前${PROFESSION_INFO[c.prof].label}技能 ${fmt(skillOfCourse(p, c))} / 门槛 ${QUAL_THRESHOLD[c.prof]}。`);
+  const mentor = assignMentor(s, e, c);
+  if (!mentor) e.pauseReason = MENTOR_WAIT;
+  const away = mentor ? [] : mentorsAway(s, c, p.id).map((m) => m.name);
+  log(
+    s,
+    'research',
+    `${p.name}报名「${c.label}」${mentor ? `，开始脱产培训（导师 ${mentor.name}）` : `，等待导师（${away.join('、') || '合格导师'}回到列车后留车授课；等待期间学员在原岗位工作）`}${paidNow ? `，消耗 ${costText(c.cost)}` : '，从上次进度继续，不再收费'}。当前${PROFESSION_INFO[c.prof].label}技能 ${fmt(skillOfCourse(p, c))} / 门槛 ${QUAL_THRESHOLD[c.prof]}。`,
+  );
   return e;
 }
 
@@ -171,18 +224,19 @@ export function tickTraining(s: GameState): void {
       const mentorOk = m && m.aboard && !m.leftBehind && !enrollmentOf(s, m) && !(m.groupId != null && !isHome(s.groups.find((g) => g.id === m.groupId)!));
       if (!mentorOk) {
         e.mentorId = null;
-        const next = mentorsFor(s, c, p.id).available[0];
-        if (next) e.mentorId = next.id;
-        else reason = '没有可用导师（导师出勤或带教已满）';
+        if (!assignMentor(s, e, c)) reason = MENTOR_WAIT;
       }
     }
     if (reason) {
-      if (e.pauseReason !== reason) log(s, 'research', `${p.name}的「${c.label}」自动暂停：${reason}。条件恢复后自动继续。`);
+      if (e.pauseReason !== reason) log(s, 'research', reason === MENTOR_WAIT ? `${p.name}的「${c.label}」${MENTOR_WAIT}；学员暂回原岗位工作。` : `${p.name}的「${c.label}」自动暂停：${reason}。条件恢复后自动继续。`);
       e.pauseReason = reason;
-      if (reason !== '没有可用导师（导师出勤或带教已满）') e.mentorId = null;
+      if (reason !== MENTOR_WAIT) e.mentorId = null;
       continue;
     }
-    if (e.pauseReason) log(s, 'research', `${p.name}的「${c.label}」恢复进行。`);
+    if (e.pauseReason === MENTOR_WAIT || waitingMentor(e)) {
+      const m = s.passengers.find((x) => x.id === e.mentorId);
+      log(s, 'research', `导师 ${m?.name ?? ''}到位，${p.name}的「${c.label}」开始脱产授课。`);
+    } else if (e.pauseReason) log(s, 'research', `${p.name}的「${c.label}」恢复进行。`);
     e.pauseReason = '';
     s.inventory.energy -= TRAINING.energyHour / 60;
     const step = Math.min(1 / c.time, 1 - (p.courseProgress[c.id] ?? 0));

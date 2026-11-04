@@ -312,7 +312,8 @@ export interface CourseDef {
 export const COURSES: CourseDef[] = [
   { id: 'pilotBasic', prof: 'pilot', label: '驾驶基础', gain: 22, time: 300, cost: { propellant: 12, energy: 20 }, unlock: '可在出勤小组担任驾驶员' },
   { id: 'surveyBasic', prof: 'surveyor', label: '勘探基础', gain: 20, time: 240, cost: { energy: 25 }, unlock: '可在出勤小组担任勘探员' },
-  { id: 'miningBasic', prof: 'miner', label: '采掘基础', gain: 22, time: 240, cost: { iron: 6, energy: 20 }, unlock: '可在出勤小组担任采掘工' },
+  // 采掘基础只耗能源：开局铁矿为 0，且铁矿要优先用于主驱动维修零件与运输机制造
+  { id: 'miningBasic', prof: 'miner', label: '采掘基础', gain: 22, time: 240, cost: { energy: 30 }, unlock: '可在出勤小组担任采掘工' },
   { id: 'engBasic', prof: 'engineer', label: '工程基础', gain: 20, time: 300, cost: { parts: 1, energy: 20 }, unlock: '可在出勤小组担任工程师（列车岗位仍按背景分配）' },
 ];
 

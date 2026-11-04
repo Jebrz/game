@@ -4,7 +4,7 @@
 import { GROUPS, TRAIN_MIN_STAFF } from '../config/balance';
 import { GROUP_NAMES, PROFESSION_INFO } from '../config/content';
 import { COURSES, FIELD_MIN_AGE } from '../config/balance';
-import { hasQual, isTraining, mentorLoad } from './training';
+import { hasQual, inCourse, mentorLoad } from './training';
 
 const COURSE_PROF: Record<string, Profession> = Object.fromEntries(COURSES.map((c) => [c.id, c.prof]));
 import { log, person } from './core';
@@ -28,7 +28,7 @@ function freeCandidates(s: GameState, exclude: Set<number>): Passenger[] {
       p.fatigue <= GROUPS.restFatigue &&
       p.recoveringUntil <= s.time &&
       p.age >= FIELD_MIN_AGE &&
-      !isTraining(s, p) &&
+      !inCourse(s, p) &&
       mentorLoad(s, p) === 0,
   );
 }
@@ -105,25 +105,7 @@ export function reformGroups(s: GameState): void {
     }
     g.memberIds = keep.map((p) => p.id);
     // 2) 补充缺少的成员（不占用列车必需岗位与其他组成员）
-    const reserved = reservedForTrain(s);
-    const added: string[] = [];
-    const missing: string[] = [];
-    for (const [prof, need] of Object.entries(req) as [Profession, number][]) {
-      if (!need) continue;
-      const have = keep.filter((p) => (g.memberRoles[p.id] ?? p.profession) === prof).length;
-      if (have >= need) continue;
-      const pool = freeCandidates(s, reserved)
-        .filter((p) => hasQual(p, prof))
-        .sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
-      const got = pool.slice(0, need - have);
-      for (const p of got) {
-        p.groupId = g.id;
-        g.memberIds.push(p.id);
-        g.memberRoles[p.id] = prof;
-        added.push(p.name);
-      }
-      if (have + got.length < need) missing.push(`${PROFESSION_INFO[prof].label} ×${need - have - got.length}`);
-    }
+    const { added, missing } = fillGaps(s, g);
     g.missing = missing;
     chooseLeader(s, g);
     if (released.length || added.length) changes.push(`${g.name}${added.length ? ` 加入 ${added.join('、')}` : ''}${released.length ? ` 离组 ${released.join('、')}` : ''}`);
@@ -138,6 +120,65 @@ export function reformGroups(s: GameState): void {
   const summary = s.groups.map((g) => `${g.name}${g.missing.length ? `（缺 ${g.missing.join('、')}）` : `（${g.memberIds.length}人）`}`);
   const pending = s.groups.filter((g) => g.pendingReform).map((g) => g.name);
   log(s, 'group', `按职业要求调整编组：${changes.length ? changes.join('；') + '。' : '在列车上的小组人员无变动。'}${pending.length ? `${pending.join('、')}出勤中，返航后再调整。` : ''}现状：${summary.join('，')}`);
+}
+
+/** 按职业要求为小组补充缺少的成员（只从空闲合格人员中递补，不占用列车必需人员、学员、导师与其他组成员）。 */
+function fillGaps(s: GameState, g: Group): { added: string[]; missing: string[] } {
+  const req = s.groupRequirement;
+  const reserved = reservedForTrain(s);
+  const added: string[] = [];
+  const missing: string[] = [];
+  for (const [prof, need] of Object.entries(req) as [Profession, number][]) {
+    if (!need) continue;
+    const have = g.memberIds.filter((id) => (g.memberRoles[id] ?? person(s, id).profession) === prof).length;
+    if (have >= need) continue;
+    const pool = freeCandidates(s, reserved)
+      .filter((p) => hasQual(p, prof))
+      .sort((a, b) => profSkill(b, prof) - profSkill(a, prof));
+    const got = pool.slice(0, need - have);
+    for (const p of got) {
+      p.groupId = g.id;
+      g.memberIds.push(p.id);
+      g.memberRoles[p.id] = prof;
+      added.push(`${p.name}（${PROFESSION_INFO[prof].label}）`);
+    }
+    if (have + got.length < need) missing.push(`${PROFESSION_INFO[prof].label} ×${need - have - got.length}`);
+  }
+  return { added, missing };
+}
+
+/** 能否从空闲合格人员中为该职业递补一人（不改变状态） */
+export function canRefill(s: GameState, prof: Profession): boolean {
+  const reserved = reservedForTrain(s);
+  return freeCandidates(s, reserved).some((p) => hasQual(p, prof));
+}
+
+/**
+ * 成员离组（例如留车担任导师）：小组保留贡献点、运输机与历史，空缺由空闲合格人员递补；
+ * 无人可递补时记录缺口（与编组不足相同的处理）。返回递补说明。
+ */
+export function releaseMember(s: GameState, g: Group, p: Passenger): { added: string[]; missing: string[] } {
+  g.memberIds = g.memberIds.filter((id) => id !== p.id);
+  delete g.memberRoles[p.id];
+  p.groupId = null;
+  const r = fillGaps(s, g);
+  g.missing = r.missing;
+  chooseLeader(s, g);
+  return r;
+}
+
+/** 在列车上的小组有缺口时，尝试从空闲合格人员中递补（例如授课导师结束授课后）。 */
+export function refillGroup(s: GameState, g: Group): void {
+  if (!g.missing.length || !isHome(g) || g.state === 'unloading') return;
+  const r = fillGaps(s, g);
+  g.missing = r.missing;
+  if (!r.added.length) return;
+  chooseLeader(s, g);
+  log(s, 'group', `${g.name}递补成员：${r.added.join('、')}${r.missing.length ? `；仍缺 ${r.missing.join('、')}` : '，编组已满'}。`);
+  if (!r.missing.length && g.state === 'grounded' && g.status.startsWith('编组')) {
+    setState(s, g, 'docked', '编组完成，待命');
+    g.timer = 1;
+  }
 }
 
 // ---------------- 动态新增小组 ----------------

@@ -9,10 +9,10 @@ import { clamp, dist, fmt, fmtTime, groupShuttle, log, members, rand } from './c
 import { groupConsiderPurchases, settleCargo, unitPrice } from './economy';
 import { groupConsiderShuttle } from './hangar';
 import { activePermit, changeRelation, depositAccess } from './natives';
-import { isMentoring, isTraining, onJob } from './training';
+import { inCourse, isMentoring, isTraining, onJob } from './training';
 import { assignedEvent, completeEvent, discoverNativeMine, discoverSignEvent } from './events';
 import { rawShortfall } from './objectives';
-import { decide, isHome, leaderPersonality, reformGroups, setState } from './groups';
+import { decide, isHome, leaderPersonality, refillGroup, reformGroups, setState } from './groups';
 import { cargoCap, cargoUsed, exploreTime, fuelPerKm, mineRate, speed, tank } from './shuttles';
 import type { Deposit, GameState, Group, RawId, Shuttle, Sign } from './types';
 
@@ -68,6 +68,7 @@ function tickHome(s: GameState, g: Group): void {
   if (g.timer > 0) return;
   g.timer = 10; // 默认 10 分钟后再评估
   if (g.pendingReform) reformGroups(s);
+  else if (g.missing.length) refillGroup(s, g);
   thinkAtTrain(s, g);
 }
 
@@ -89,8 +90,8 @@ function blockAtTrain(s: GameState, g: Group, sh: Shuttle | null): string {
   if (!s.planet?.scanned) return '等待列车扫描结果';
   const st = stage(s);
   if (st === 'edge' || st === 'impact') return '灾变临近，不再出勤';
-  const training = members(s, g).filter((p) => isTraining(s, p) || isMentoring(s, p));
-  if (training.length) return `成员${training.map((p) => `${p.name}（${isTraining(s, p) ? '脱产培训中' : '授课中'}）`).join('、')}，暂不可出勤`;
+  const training = members(s, g).filter((p) => inCourse(s, p) || isMentoring(s, p));
+  if (training.length) return `成员${training.map((p) => `${p.name}（${isTraining(s, p) ? '脱产培训中' : inCourse(s, p) ? '已报名培训，等待导师' : '授课中'}）`).join('、')}，暂不可出勤`;
   const rec = members(s, g).filter((p) => p.recoveringUntil > s.time);
   if (rec.length) {
     const left = Math.max(...rec.map((p) => p.recoveringUntil - s.time));
