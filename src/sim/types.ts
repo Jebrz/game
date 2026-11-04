@@ -102,6 +102,9 @@ export interface Group {
   lastCargoFullRatio: number;
   trips: number;
   purchases: string[];
+  loot: Partial<Record<ItemId, number>>; // 野外取得、待带回列车的物资
+  lootResearch: number;
+  pendingSwap: number | null; // 列车长安排的「返航卸货后换装」备用机 id
 }
 
 export type ShuttleModel = 'hauler' | 'miner' | 'scout';
@@ -151,6 +154,8 @@ export interface Deposit {
   hazard: number; // 0-1 风险
   discoveredBy: number | null;
   discoveredAt: number;
+  /** open=可自由作业；permit=原住民领地，需协商许可；hostile=敌对禁区，不可作业 */
+  zone: 'open' | 'permit' | 'hostile';
 }
 
 export interface Sign {
@@ -166,6 +171,12 @@ export interface Sign {
   hazard: number;
   eventId: string | null;
   resultText: string;
+  /** resource=资源迹象；ruin=遗迹/异常信号（可能有遗留物资或调查数据）；natives=原住民聚落信号 */
+  kind: 'resource' | 'ruin' | 'natives';
+  restricted: boolean; // 位于敌对禁区内，小组不会接近
+  loot: Partial<Record<ItemId, number>>; // 遗迹中的遗留物资（探索后带回，只发一次）
+  research: number; // 调查数据（研究点）
+  lootTaken: boolean;
 }
 
 export interface PlanetState {
@@ -179,6 +190,49 @@ export interface PlanetState {
   signs: Sign[];
   deposits: Deposit[];
   hazardZones: { x: number; y: number; r: number }[];
+  resourceProfile: ResourceProfile;
+  natives: NativesState;
+  /** 本星球的灾变预警记录（每颗星球单独提示） */
+  warned: boolean;
+  edgeWarned: boolean;
+}
+
+export type ResourceProfile = 'rich' | 'poor' | 'barren';
+export type NativeKind = 'none' | 'friendly' | 'hostile';
+
+export interface NativeTrade {
+  id: string;
+  give: Partial<Record<ItemId, number>>; // 列车付出
+  get: Partial<Record<ItemId, number>>; // 列车得到
+  stock: number; // 剩余可交易次数
+}
+
+export interface NativesState {
+  kind: NativeKind;
+  name: string;
+  x: number;
+  y: number;
+  r: number; // 领地 / 禁区半径
+  detected: boolean; // 扫描后知道存在（友好为聚落信号，敌对为禁区）
+  contacted: boolean; // 友好：小组实地接触后建立联系
+  permitGranted: boolean;
+  permitCost: Partial<Record<ItemId, number>>;
+  trades: NativeTrade[];
+}
+
+/** 航线节点：星球或公共交易站。星球地图在开局时一次生成并随存档保存。 */
+export interface RouteNode {
+  id: number;
+  kind: 'planet' | 'station';
+  name: string;
+  pos: number; // 轨道里程（Mm）
+  intel: string; // 远程情报（到达前可见，不一定精确）
+  /** 非当前星球的地图数据；当前所在星球的地图在 GameState.planet 中（同一时刻只有一处持有，避免存档重复） */
+  planet: PlanetState | null;
+  status: 'unvisited' | 'current' | 'visited' | 'skipped';
+  arrivedAt: number;
+  departedAt: number;
+  notes: string[]; // 访问记录摘要
 }
 
 export type JobKind = 'recipe' | 'shuttle' | 'hangar';
@@ -250,19 +304,24 @@ export interface GameState {
     done: string[];
     current: string | null;
     progress: number;
+    bank: number; // 遗迹调查数据（研究点储备，自动投入当前研究）
   };
   policies: Policies;
   robots: { count: number; condition: number };
   catastrophe: {
-    trueArrival: number;
-    bias: number;
-    warned: boolean;
-    edgeWarned: boolean;
-    arrived: boolean;
-    chase: number; // 追赶进度 0-100（离开星球后）
+    front: number; // 灾变前锋的轨道里程（Mm），沿航线追赶列车
+    bias: number; // 预测偏差（随距离缩小）
+    arrived: boolean; // 前锋已越过当前停靠的星球
+    lastMilestone: number; // 已提示的加速阶段
+  };
+  journey: {
+    nodes: RouteNode[];
+    current: number; // 列车所在（或刚离开）的节点
+    dest: number | null; // 航行目的地
+    pos: number; // 列车轨道里程
   };
   recallActive: boolean;
-  travel: { progress: number; duration: number } | null;
+  travel: { progress: number; duration: number; from: number; to: number; fuel: number } | null;
   station: {
     docked: boolean;
     feePaid: boolean;

@@ -104,10 +104,37 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.fill();
     ctx.stroke();
   }
-  // 资源迹象
+  // 原住民领地 / 敌对禁区（扫描后可见）
+  const N = P.natives;
+  if (N.kind !== 'none' && N.detected) {
+    const hostile = N.kind === 'hostile';
+    ctx.fillStyle = hostile ? 'rgba(170,80,255,0.16)' : 'rgba(120,220,170,0.10)';
+    ctx.strokeStyle = hostile ? 'rgba(190,110,255,0.8)' : 'rgba(120,220,170,0.7)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash(hostile ? [] : [6, 4]);
+    ctx.beginPath();
+    ctx.arc(X(N.x), Y(N.y), N.r * sc, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = hostile ? '#d8b0ff' : '#a8f0c8';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(hostile ? `⛔ ${N.name}禁区` : `${N.name}领地${N.permitGranted ? '（已许可）' : N.contacted ? '（需许可）' : ''}`, X(N.x), Y(N.y) + N.r * sc + 14);
+    ctx.textAlign = 'left';
+    hits.push({
+      x: X(N.x),
+      y: Y(N.y),
+      r: N.r * sc,
+      html: hostile
+        ? `<b>${N.name}禁区</b><br>拒绝接近。区内迹象与矿点不可进入或作业，小组会绕开。本阶段不实现战斗。`
+        : `<b>${N.name}领地</b><br>${N.contacted ? `已建立联系。${N.permitGranted ? '已取得采矿许可。' : '领地内矿点需要协商采矿许可（「航线」面板）。'}` : '尚未接触：派小组调查「人工信号」可建立联系。'}`,
+    });
+  }
+  // 迹象（资源 / 遗迹 / 原住民信号）
   for (const sg of P.signs) {
     if (!sg.revealed) continue;
-    const col = RES_COLOR[sg.guess];
+    const col = sg.kind === 'ruin' ? '#e0c080' : sg.kind === 'natives' ? '#a8f0c8' : RES_COLOR[sg.guess];
     ctx.strokeStyle = col;
     ctx.globalAlpha = sg.explored ? 0.25 : 0.85;
     ctx.setLineDash([4, 4]);
@@ -119,14 +146,24 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.fillStyle = col;
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(sg.explored ? '' : `? ${sg.label}`, X(sg.x), Y(sg.y) - sg.radius * sc - 4);
+    ctx.fillText(sg.explored ? (sg.kind === 'resource' && !P.deposits.some((d) => d.signId === sg.id) ? '✕ 无矿' : '') : `? ${sg.label}${sg.restricted ? '（禁区）' : ''}`, X(sg.x), Y(sg.y) - sg.radius * sc - 4);
     ctx.globalAlpha = 1;
     const exp = sg.exploringGroupId != null ? s.groups.find((g) => g.id === sg.exploringGroupId)?.name : null;
     hits.push({
       x: X(sg.x),
       y: Y(sg.y),
       r: sg.radius * sc,
-      html: `<b>${sg.label}</b>${sg.hazard >= 0.15 ? ' <span class="badtext">风险区</span>' : ''}<br>${sg.explored ? `已探索：${sg.resultText}` : exp ? `${exp}正在前往/探索` : '未探索。低级探测仪无法确认矿点，需小组实地探索。'}`,
+      html: `<b>${sg.label}</b>${sg.hazard >= 0.15 ? ' <span class="badtext">风险区</span>' : ''}${sg.restricted ? ' <span class="badtext">位于禁区，无法接近</span>' : ''}<br>${
+        sg.explored
+          ? `已调查：${sg.resultText || (P.deposits.some((d) => d.signId === sg.id) ? '已确认矿点' : '确认无可采矿产')}`
+          : exp
+            ? `${exp}正在前往/调查`
+            : sg.kind === 'ruin'
+              ? '未调查的异常信号：可能是遗迹或遗留物资。'
+              : sg.kind === 'natives'
+                ? '未调查的人工信号。'
+                : '尚未调查：低级探测仪无法确认是否有矿点，需小组实地调查。'
+      }`,
     });
   }
   ctx.textAlign = 'left';
@@ -153,7 +190,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     });
     ctx.fillStyle = '#e8eefc';
     ctx.font = '11px sans-serif';
-    ctx.fillText(`${d.name} ${fmt(d.reserve)}`, x + 11, y + 4);
+    ctx.fillText(`${d.name} ${fmt(d.reserve)}${d.zone === 'hostile' ? '（禁区）' : d.zone === 'permit' && !P.natives.permitGranted ? '（需许可）' : ''}`, x + 11, y + 4);
     const slotTxt = d.slots
       .map((sl, i) => {
         const g = s.groups.find((x) => x.id === sl.holderGroupId);
@@ -164,7 +201,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
       x,
       y,
       r: 12,
-      html: `<b>${d.name}</b>（${ITEM_INFO[d.resource].label}）<br>储量 ${fmt(d.reserve)}/${d.initialReserve}${empty ? ' <span class="badtext">已采空</span>' : ''}${d.hazard >= 0.15 ? '<br><span class="badtext">风险区：可能落石</span>' : ''}<br>${slotTxt}`,
+      html: `<b>${d.name}</b>（${ITEM_INFO[d.resource].label}）${d.zone === 'hostile' ? '<br><span class="badtext">敌对禁区内，不可作业</span>' : d.zone === 'permit' && !P.natives.permitGranted ? `<br><span class="why">${P.natives.name}领地内，需要采矿许可</span>` : ''}<br>储量 ${fmt(d.reserve)}/${d.initialReserve}${empty ? ' <span class="badtext">已采空</span>' : ''}${d.hazard >= 0.15 ? '<br><span class="badtext">风险区：可能落石</span>' : ''}<br>${slotTxt}`,
     });
   }
   // 列车
@@ -246,7 +283,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, w: number, h: number, s: 
     ctx.fillText(t, w - 206, h - 74 + i * 16);
   });
   ctx.fillStyle = '#cfd6e6';
-  ctx.fillText('虚线圈=资源迹象  ◆=已确认矿点', w - 220, h - 26);
+  ctx.fillText('虚线圈=迹象（黄=遗迹） ◆=已确认矿点', w - 220, h - 26);
   ctx.fillText('橙色虚线=基本任务半径  红圈=风险区', w - 220, h - 12);
   if (!P.scanned) {
     ctx.fillStyle = '#cfd6e6';

@@ -2,10 +2,10 @@
 
 import { TIME, TRAIN } from '../config/balance';
 import * as A from '../sim/actions';
-import { estimate, stage, STAGE_LABEL } from '../sim/catastrophe';
+import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
 import { advance, type Clock } from '../sim/clock';
 import { clockText, fmt, fmtTime, log } from '../sim/core';
-import { objectives, rawShortfall } from '../sim/objectives';
+import { journeyObjectives, nextLegFuel, planetObjectives, rawShortfall, type Objective } from '../sim/objectives';
 import { ITEM_INFO } from '../config/content';
 import { loadFrom, saveTo, slotInfo, type SlotId } from '../sim/save';
 import { createInitialState } from '../sim/state';
@@ -160,9 +160,14 @@ export class App {
     if (s.phase === 'planet') {
       const st = stage(s);
       const e = estimate(s);
-      h += `<span class="chip click ${st === 'far' ? '' : st === 'warn' ? 'warn' : 'bad'}" data-act="tab" data-arg="recall">灾变 <b>${STAGE_LABEL[st]}</b> <small>${st === 'impact' ? '已抵达' : `${fmtTime(e.low)}～${fmtTime(e.high)}`}</small></span>`;
+      const acc = accelInfo(s);
+      h += `<span class="chip click ${st === 'far' ? '' : st === 'warn' ? 'warn' : 'bad'}" data-act="tab" data-arg="recall" title="${esc(acc.text)}">灾变 <b>${STAGE_LABEL[st]}</b> <small>${st === 'impact' ? '已抵达' : `${fmtTime(e.low)}～${fmtTime(e.high)}`}${acc.frac > 0.05 && acc.frac < 0.999 ? ' · 加速中' : ''}</small></span>`;
       if (s.recallActive) h += `<span class="chip bad">召回令生效</span>`;
-    } else if (s.phase !== 'intro') h += `<span class="chip">灾变追赶 <b>${fmt(s.catastrophe.chase, 1)}%</b>${s.station.docked ? ' <small>暂停</small>' : ''}</span>`;
+    } else if (s.phase !== 'intro') h += `<span class="chip click" data-act="tab" data-arg="recall">灰烬潮 <b>${fmt(gapToTrain(s))} Mm</b> <small>${s.station.docked ? '追赶暂停' : '航行中拉开距离'}</small></span>`;
+    if (s.phase !== 'intro') {
+      const node = s.journey.nodes[s.travel ? s.travel.to : s.journey.current];
+      h += `<span class="chip click" data-act="tab" data-arg="route">${s.travel ? '前往' : '位置'} <b>${esc(node.name)}</b> <small>${s.journey.current + 1}/${s.journey.nodes.length}</small></span>`;
+    }
     h += `<span class="spacer"></span>${sbtn('存档 / 读档', 'saveMenu')}`;
     return h;
   }
@@ -178,12 +183,17 @@ export class App {
   }
 
   objectivesHtml(): string {
-    const obs = objectives(this.s);
-    const cur = obs.findIndex((o) => !o.done);
-    if (this.objCollapsed) return `<h4>阶段目标 ${cur < 0 ? obs.length : cur}/${obs.length} ${sbtn('展开', 'objToggle')}</h4>`;
-    return `<h4>第一阶段目标 ${sbtn('收起', 'objToggle')}</h4><ol>${obs
-      .map((o, i) => `<li class="${o.done ? 'done' : i === cur ? 'cur' : ''}">${o.done ? '✔ ' : ''}${esc(o.label)}${!o.done && i === cur && o.detail ? `<small>${esc(o.detail)}</small>` : ''}</li>`)
-      .join('')}</ol><div class="hint">${esc(this.hint())}</div>`;
+    const ps = planetObjectives(this.s);
+    const js = journeyObjectives(this.s);
+    const li = (list: Objective[]) => {
+      const cur = list.findIndex((o) => !o.done && !o.optional);
+      return list
+        .map((o, i) => `<li class="${o.done ? 'done' : i === cur ? 'cur' : ''}">${o.done ? '✔ ' : ''}${esc(o.label)}${o.optional ? ' <small style="display:inline">（可选）</small>' : ''}${!o.done && (i === cur || o.optional) && o.detail ? `<small>${esc(o.detail)}</small>` : ''}</li>`)
+        .join('');
+    };
+    const done = js.filter((o) => o.done).length;
+    if (this.objCollapsed) return `<h4>旅程目标 ${done}/${js.length} ${sbtn('展开', 'objToggle')}</h4>`;
+    return `${ps.length ? `<h4>当前星球：${esc(this.s.planet?.name ?? '')} ${sbtn('收起', 'objToggle')}</h4><ol>${li(ps)}</ol>` : ''}<h4>旅程目标 ${ps.length ? '' : sbtn('收起', 'objToggle')}</h4><ol>${li(js)}</ol><div class="hint">${esc(this.hint())}</div>`;
   }
 
   hint(): string {
@@ -191,11 +201,12 @@ export class App {
     const P = s.planet;
     if (s.phase === 'intro') return '';
     if (s.phase === 'failed') return '列车失败。可读取存档重试。';
-    if (s.phase === 'travel') return '列车航行中。小组随车休整，生产与研究仍在进行。';
-    if (s.phase === 'station') return A.stageComplete(s) ? '阶段目标已完成：在「交易站」查看总结，或继续在站内查看列车。' : '在「交易站」面板购买补给或维修车体。';
+    if (s.phase === 'travel') return '列车航行中，正在拉开与灰烬潮的距离。小组随车休整，生产与研究仍在进行。';
+    if (s.phase === 'station') return A.stageComplete(s) ? '旅程目标已完成：在「交易站」查看旅程总结，或继续在站内查看列车。' : '在「交易站」面板购买补给或维修车体。';
     const st = stage(s);
-    if (st === 'edge' || st === 'impact') return s.recallActive ? '等待小组归队后，到「列车」面板离站。' : '危险！到「灾变召回」发出紧急召回令。';
+    if (st === 'edge' || st === 'impact') return s.recallActive ? '等待小组归队后，到「航线」面板离站。' : '危险！到「灾变召回」发出紧急召回令。';
     if (!P?.scanned) return P && P.scanProgress >= 0 ? '扫描进行中，可以先浏览各面板。' : '提示：到「列车」面板启动扫描（或点击车头）。空格键暂停，1-4 切换速度。';
+    if (P.natives.kind === 'friendly' && P.natives.contacted && !P.natives.permitGranted && P.deposits.some((d) => d.zone === 'permit' && d.discoveredBy != null)) return `已与${P.natives.name}建立联系：可在「航线」面板交易物资或协商领地采矿许可。`;
     if (!s.stats.deliveries) return '小组会自主探索迹象、确认矿点并采矿。切到「星球地图」(M) 观察他们。';
     const partsLeft = s.train.driveRepaired ? 0 : TRAIN.driveRepairParts - s.train.driveRepair;
     const short = rawShortfall(s);
@@ -207,13 +218,15 @@ export class App {
       if (Object.keys(short.parts).length) return `维修零件还缺 ${names(short.parts)}：在「奖励政策」提高其需求奖励，小组会更愿意去采。`;
       return '维修零件正在加工中。';
     }
-    if (s.inventory.trainFuel < TRAIN.fuelForDeparture) {
-      if (s.inventory.crystal >= 3 && s.inventory.ice >= 1) return '在「库存加工」用辉晶 + 冰晶制造轨道燃料。';
-      if (Object.keys(short.fuel).length) return `轨道燃料还缺 ${names(short.fuel)}：可提高其需求奖励。`;
+    const need = nextLegFuel(s);
+    if (s.inventory.trainFuel < need) {
+      if (s.inventory.crystal >= 3 && s.inventory.ice >= 1) return `在「库存加工」用辉晶 + 冰晶制造轨道燃料（到下一站需 ${need}）。`;
+      if (Object.keys(short.fuel).length) return `下一站需要轨道燃料 ${need}，还缺 ${names(short.fuel)}：可提高其需求奖励${P.natives.contacted ? '，或与原住民交易' : ''}。`;
       return '轨道燃料正在加工中。';
     }
-    if (st === 'warn') return '列车已具备离站条件。灾变逼近，可发出召回令后离站。';
-    return '列车已可离站。可继续让小组积累资源，或召回后离站。';
+    if (st === 'warn') return '列车已具备离站条件。灾变逼近：发出召回令，在「航线」选择下一站。';
+    if (s.journey.current === 0 && !s.shuttles.some((x) => x.builtAt >= 0)) return '燃料已够下一站。时间还宽裕的话，可以在「运输机」面板制造一架新运输机，或继续积累资源。';
+    return '列车已可离站（「航线」面板）。也可以继续积累资源，后续星球的停留时间会越来越短。';
   }
 
   logHtml(): string {
@@ -324,14 +337,23 @@ export class App {
       case 'repairDrive':
         A.repairDrive(s);
         break;
+      case 'departTo':
+        A.departTo(s, Number(arg));
+        break;
+      case 'trade':
+        A.trade(s, arg);
+        break;
+      case 'permit':
+        A.grantPermit(s);
+        break;
       case 'depart':
         A.depart(s);
         break;
       case 'forceDepartAsk':
-        this.confirmForce();
+        this.confirmForce(Number(arg));
         break;
       case 'forceDepart':
-        A.depart(s, true);
+        A.departTo(s, Number(arg), true);
         this.closeModal();
         break;
       case 'enqueue':
@@ -372,6 +394,12 @@ export class App {
         break;
       case 'captainSwap':
         A.captainSwap(s, Number(a), Number(b));
+        break;
+      case 'scheduleSwap':
+        A.captainScheduleSwap(s, Number(a), Number(b));
+        break;
+      case 'cancelSwap':
+        A.captainCancelSwap(s, Number(arg));
         break;
       case 'recall':
         A.setRecall(s, arg === 'on');
@@ -467,8 +495,9 @@ export class App {
     const has = this.storage && (['auto', 'slot1', 'slot2'] as SlotId[]).some((k) => slotInfo(this.storage!, k));
     this.openModal(`<h2>星空列车</h2>
       <p>你在昏暗的车头里醒来。一条被称为「规则」的讯息刻进了意识：<b>你被选为这列车的列车长。</b></p>
-      <p>车上有 30 名幸存者。主驱动受损，燃料耗尽，列车停在灰岩星 K-7 的古老轨道锚点上。远方，一场被称为「灰烬潮」的灾变正在逼近。</p>
-      <p>你不需要亲自挖矿。乘客会组成小组，驾驶运输机自主探索与采矿；你用<b>收购奖励、任务与列车政策</b>引导他们，在车内<b>加工零件与燃料</b>，修好列车，赶在灾变前离开，前往公共交易站休整。</p>
+      <p>车上有 30 名幸存者。主驱动受损，燃料耗尽，列车停在灰岩星 K-7 的古老轨道锚点上。远方，一场被称为「灰烬潮」的灾变正沿着航线逼近——起初很慢，但会越来越快。</p>
+      <p>本段航线：灰岩星 K-7 → ${esc(this.s.journey.nodes.slice(1, -1).map((n) => n.name).join(' → '))} → 回声交易站。后续星球情况未知，可能富矿、贫矿或无矿，也可能有原住民。</p>
+      <p>你不需要亲自挖矿。乘客会组成小组，驾驶运输机自主探索与采矿；你用<b>收购奖励、任务与列车政策</b>引导他们，在车内<b>加工零件与燃料</b>，修好列车，在灾变赶上之前一站站前进，最终抵达公共交易站休整。</p>
       <p class="note">操作：空格 暂停/继续 · 1-4 切换速度 · T 列车剖视 · M 星球地图 · 点击车厢打开对应面板。所有数值均为原型参数。</p>
       <div class="actions">${sbtn('开始（列车长就位）', 'start', '', '', 'primary')}${has ? sbtn('读取存档…', 'saveMenu') : ''}</div>`);
   }
@@ -497,9 +526,9 @@ export class App {
     this.openModal(`<h2>列车失守</h2><p>${esc(this.s.failReason)}</p><p class="note">失败只会在灰烬潮抵达后列车仍未离站、车体归零时发生。</p><div class="actions">${sbtn('读取存档…', 'saveMenu', '', '', 'primary')}${sbtn('重新开始', 'newGame')}</div>`);
   }
 
-  confirmForce(): void {
+  confirmForce(index: number): void {
     const names = A.outsideGroups(this.s).flatMap((g) => g.memberIds.map((id) => this.s.passengers.find((p) => p.id === id)!.name));
-    this.openModal(`<h2>强行离站？</h2><p>以下人员与其运输机将被遗留在星球上：<b>${esc(names.join('、'))}</b></p><p class="badtext">这是严重行为：全体乘客敌意将大幅上升，并长期影响士气。</p><div class="actions">${sbtn('取消', 'close', '', '', 'primary')}${sbtn('确认遗留并离站', 'forceDepart', '', A.canForceDepart(this.s), 'danger')}</div>`);
+    this.openModal(`<h2>强行离站？</h2><p>以下人员与其运输机将被遗留在星球上：<b>${esc(names.join('、'))}</b></p><p class="badtext">这是严重行为：全体乘客敌意将大幅上升，并长期影响士气。</p><div class="actions">${sbtn('取消', 'close', '', '', 'primary')}${sbtn('确认遗留并离站', 'forceDepart', index, A.canDepartTo(this.s, index, true), 'danger')}</div>`);
   }
 
   toast(title: string, text: string, danger = false): void {

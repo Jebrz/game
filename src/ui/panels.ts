@@ -1,10 +1,12 @@
 // 侧边详细面板（每个标签一个函数，返回 HTML）
 
-import { DEMAND_BONUS, GENE, GROUP_ORDER, GROUPS, ROBOTS, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
+import { DEMAND_BONUS, GENE, GROUP_ORDER, GROUPS, ROBOTS, ROUTE, SHUTTLE_BUILD, SHUTTLE_MODELS, SHUTTLE_UPGRADES, STATION, SURVIVAL, TRAIN, TRAIN_MIN_STAFF } from '../config/balance';
 import { canExpandHangar, canOrderShuttle, hangarUsage, itemListText, jobLabel, jobSource, nextExpansion, QUEUE_MAX, refundText } from '../sim/hangar';
 import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INFO, RAW_IDS, RECIPES, RESEARCH } from '../config/content';
 import * as A from '../sim/actions';
-import { estimate, stage, STAGE_LABEL } from '../sim/catastrophe';
+import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
+import { mineralStatus, nextLegFuel } from '../sim/objectives';
+import { tradeText } from '../sim/natives';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
 import { clockText, fmt, fmtTime, groupShuttle, members } from '../sim/core';
 import { geneEligibility, geneTrainBlock, purchaseOptions, unitPrice } from '../sim/economy';
@@ -17,10 +19,11 @@ import { recipeOutputs } from '../sim/train';
 import type { GameState, ItemId, Passenger, Profession, RawId, Shuttle, TrainDept } from '../sim/types';
 import { bar, btn, esc, sbtn } from './html';
 
-export type TabId = 'train' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
+export type TabId = 'train' | 'route' | 'groups' | 'shuttles' | 'industry' | 'policy' | 'research' | 'people' | 'mood' | 'recall' | 'station';
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: 'train', label: '列车' },
+  { id: 'route', label: '航线' },
   { id: 'groups', label: '小组' },
   { id: 'shuttles', label: '运输机' },
   { id: 'industry', label: '库存加工' },
@@ -39,6 +42,8 @@ export function renderPanel(s: GameState, tab: TabId): string {
   switch (tab) {
     case 'train':
       return trainPanel(s);
+    case 'route':
+      return routePanel(s);
     case 'groups':
       return groupsPanel(s);
     case 'shuttles':
@@ -77,28 +82,21 @@ function trainPanel(s: GameState): string {
     h += `<div class="badtext">受损：需要 ${TRAIN.driveRepairParts} 件维修零件（库存 ${fmt(s.inventory.parts)}）</div>`;
     h += `<div class="row">${btn('投入零件，开始维修', 'repairDrive', '', A.canRepairDrive(s), 'primary')}</div>`;
   }
-  h += `<div>轨道燃料（列车专用） <b>${fmt(s.inventory.trainFuel)}/${TRAIN.fuelForDeparture}</b> 单位 ${bar(s.inventory.trainFuel / TRAIN.fuelForDeparture, 'warm')}</div>`;
+  const need = nextLegFuel(s);
+  h += `<div>轨道燃料（列车专用） <b>${fmt(s.inventory.trainFuel)}</b> 单位${need ? `（到下一站需 ${need}）` : ''} ${need ? bar(s.inventory.trainFuel / need, 'warm') : ''}</div>`;
 
   if (s.phase === 'planet' && P) {
     h += `<h4>列车探测仪（低级）</h4>`;
-    if (P.scanned) h += `<div class="ok">✔ 已扫描：${P.signs.length} 处资源迹象。具体矿点需小组实地探索确认。</div>`;
+    if (P.scanned) h += `<div class="ok">✔ 已扫描：${P.signs.length} 处迹象。具体矿点需小组实地调查确认。</div><div>矿产状态：${esc(mineralStatus(P))}</div>`;
     else if (P.scanProgress >= 0) h += `<div>扫描中 ${P.scanProgress}/${TRAIN.scanTime} 分</div>${bar(P.scanProgress / TRAIN.scanTime)}`;
-    else h += `<div class="row">${btn(`启动扫描（能源 ${TRAIN.scanEnergy} kWh）`, 'scan', '', A.canScan(s), 'primary')}</div><div class="note">只能揭示资源迹象的大致范围，不会直接告诉你矿点位置与储量。</div>`;
-
-    h += `<h4>离站</h4>`;
-    const why = A.canDepart(s);
-    h += `<ul class="plain">
-      <li class="${t.driveRepaired ? 'ok' : ''}">主驱动修复 ${t.driveRepaired ? '✔' : '✘'}</li>
-      <li class="${s.inventory.trainFuel >= TRAIN.fuelForDeparture ? 'ok' : ''}">轨道燃料 ≥ ${TRAIN.fuelForDeparture} ${s.inventory.trainFuel >= TRAIN.fuelForDeparture ? '✔' : '✘'}</li>
-      <li class="${A.outsideGroups(s).length ? '' : 'ok'}">全员归队 ${A.outsideGroups(s).length ? '✘' : '✔'}</li></ul>`;
-    h += `<div class="row">${btn('离站航行', 'depart', '', why, 'primary')}</div>`;
-    const fw = A.canForceDepart(s);
-    if (!fw) h += `<div class="row">${btn('强行离站（遗留未归人员）', 'forceDepartAsk', '', '', 'danger')}<span class="note">严重行为：会遗留人员与运输机，全体敌意大增</span></div>`;
+    else h += `<div class="row">${btn(`启动扫描（能源 ${TRAIN.scanEnergy} kWh）`, 'scan', '', A.canScan(s), 'primary')}</div><div class="note">只能揭示迹象的大致范围，不会直接告诉你矿点位置与储量。</div>`;
+    h += `<h4>离站</h4><div class="note">在「航线」面板选择下一站（可跳过星球），查看燃料需求与到达后的灾变预估。</div><div class="row">${sbtn('打开航线面板', 'tab', 'route', '', 'primary')}</div>`;
   }
   if (s.phase === 'travel' && s.travel) {
-    h += `<h4>航行</h4><div>前往 ${STATION.name}：${fmt(s.travel.progress)}/${s.travel.duration} 分</div>${bar(s.travel.progress / s.travel.duration)}`;
+    const to = s.journey.nodes[s.travel.to];
+    h += `<h4>航行</h4><div>前往 ${esc(to.name)}：${fmt(s.travel.progress)}/${s.travel.duration} 分</div>${bar(s.travel.progress / s.travel.duration)}`;
   }
-  if (s.phase !== 'planet') h += `<div>灾变追赶进度 <b>${fmt(s.catastrophe.chase, 1)}%</b> ${s.station.docked ? '<span class="note">（停泊期间暂停，离站后续接，不清零）</span>' : ''}</div>`;
+  if (s.phase !== 'planet' && s.phase !== 'intro') h += `<div>灰烬潮前锋距列车 <b>${fmt(gapToTrain(s))} Mm</b> ${s.station.docked ? '<span class="note">（停泊交易站期间暂停推进）</span>' : `<span class="note">（${esc(accelInfo(s).text)}）</span>`}</div>`;
 
   h += `<h4>列车岗位（自动分配）</h4><table><tr><th>部门</th><th class="num">人数</th><th class="num">有效产能</th><th>作用</th></tr>`;
   const effect: Record<TrainDept, string> = {
@@ -220,15 +218,25 @@ function shuttlesPanel(s: GameState): string {
     }
     if (sh.assignedTo === 'spare') {
       for (const g of s.groups) {
-        const w = A.canSwap(s, g, sh, 'captain');
         const cur = s.shuttles.find((x) => x.id === g.shuttleId);
-        acts.push(sbtn(`分配给${g.name}${cur ? '（换机）' : ''}`, 'captainSwap', `${g.id}:${sh.id}`, w) + (w ? `<span class="why">${esc(w)}</span>` : ''));
+        if (g.pendingSwap === sh.id) {
+          acts.push(`<span class="ok">已安排${esc(g.name)}返航卸货后换装</span> ${sbtn('取消安排', 'cancelSwap', g.id)}`);
+          continue;
+        }
+        const w = A.canSwap(s, g, sh, 'captain');
+        if (!w) {
+          acts.push(sbtn(`分配给${g.name}${cur ? '（换机）' : ''}`, 'captainSwap', `${g.id}:${sh.id}`));
+          continue;
+        }
+        const sw = A.canScheduleSwap(s, g, sh);
+        if (!sw) acts.push(sbtn(`安排${g.name}返航后换装`, 'scheduleSwap', `${g.id}:${sh.id}`) + `<span class="why">${esc(w)}，可预约</span>`);
+        else acts.push(sbtn(`分配给${g.name}`, 'captainSwap', `${g.id}:${sh.id}`, w) + `<span class="why">${esc(w)}</span>`);
       }
     }
     h += `<div class="row">${acts.join(' ')}</div></div>`;
   }
   h += `<h4>说明</h4><ul class="plain">
-    <li>每个小组只有一架主运输机。换机要求小组已返航、卸完货、不在卸货中；旧机转为备用（保留升级、耐久与燃料），不会销毁。</li>
+    <li>每个小组只有一架主运输机。换机要求小组已返航、卸完货、不在卸货中；小组出勤时可「安排返航后换装」，该机为其保留。旧机转为备用（保留升级、耐久与燃料），不会销毁。</li>
     <li>小组出资的新机只由该组领取；列车长只能配属或分配列车公共运输机，不能征用小组出资的运输机。</li>
     <li>小组会在主运输机不可用、耐久低于 ${GROUP_ORDER.lowDurability} 或货舱长期装满时，用贡献点自主订购（每组同时一单）。</li>
     <li>新小组：本阶段小组数量固定为 ${s.groups.length} 个，动态组建新组为后续内容；新机可用于换机、备用或配属列车长。</li>
@@ -386,12 +394,14 @@ function moodPanel(s: GameState): string {
 // ---------------- 灾变与召回 ----------------
 function recallPanel(s: GameState): string {
   let h = `<h3>灾变：灰烬潮</h3>`;
+  const acc = accelInfo(s);
+  h += `<div>前锋距列车 <b>${fmt(gapToTrain(s))} Mm</b>；${esc(acc.text)}</div><div class="note">灰烬潮沿航线追赶列车，推进速度由慢到快（平滑加速，不会突然跳变）。列车航速 ${ROUTE.trainSpeed * 60} Mm/小时，始终快于前锋；停靠越久，前锋越近。换星球不会重置灾变，停泊交易站期间暂停。</div>`;
+  h += `<div>加速进度 ${fmt(acc.frac * 100)}%</div>${bar(acc.frac, 'bad')}`;
   if (s.phase === 'planet') {
     const e = estimate(s);
     const st = stage(s);
-    h += `<div>阶段：<b class="${st === 'far' ? '' : 'badtext'}">${STAGE_LABEL[st]}</b></div>`;
-    h += st === 'impact' ? `<div class="badtext">灰烬潮已抵达！车体每分钟受损，必须立即离站。</div>` : `<div>预计到达：<b>${fmtTime(e.low)} ～ ${fmtTime(e.high)}</b> 后</div><div class="note">探测数据有不确定性，越接近越准确。最早时间进入 5 小时内为“逼近”，2 小时内为“危险边缘”（首次自动暂停）。</div>`;
-    h += bar(1 - e.remaining / s.catastrophe.trueArrival, 'bad');
+    h += `<h4>${esc(s.planet?.name ?? '')}</h4><div>阶段：<b class="${st === 'far' ? '' : 'badtext'}">${STAGE_LABEL[st]}</b></div>`;
+    h += st === 'impact' ? `<div class="badtext">灰烬潮已抵达！车体每分钟受损，必须立即离站。</div>` : `<div>预计到达本星：<b>${fmtTime(e.low)} ～ ${fmtTime(e.high)}</b> 后</div><div class="note">探测数据有不确定性，越接近越准确。最早时间进入 5 小时内为“逼近”，2 小时内为“危险边缘”（首次自动暂停）。</div>`;
     h += `<h3>紧急召回</h3>`;
     h += `<div class="row">${s.recallActive ? btn('解除召回令', 'recall', 'off') : btn('发出紧急召回令', 'recall', 'on', '', 'danger')}</div>`;
     h += `<div class="note">召回后所有小组立即返航（携带已采原料），在列车待命不再出勤。</div>`;
@@ -409,15 +419,77 @@ function recallPanel(s: GameState): string {
       ? `<ul class="plain">${held.map(({ d, x }) => `<li>${esc(d.name)}：${s.groups.find((g) => g.id === x.holderGroupId)?.name ?? '?'} ${x.status === 'working' ? '作业中' : `保留中，剩余 ${fmtTime(x.reservedUntil - s.time)}`}</li>`).join('')}</ul>`
       : '<div class="note">无</div>';
   } else {
-    h += `<div>已离开灰岩星。灾变追赶进度 <b>${fmt(s.catastrophe.chase, 1)}%</b>${s.station.docked ? '（停泊交易站期间暂停）' : '（航行中缓慢增长）'}</div>`;
-    h += `<div class="note">外部星球毁灭、竞争期限、最后出口关闭等远期规则本阶段未实现。</div>`;
+    h += `<div class="note">${s.station.docked ? '停泊交易站期间，灰烬潮追赶暂停（不清零）。' : '航行中：列车比前锋快，距离正在拉开。'}外部星球毁灭、竞争期限、最后出口关闭等远期规则本阶段未实现。</div>`;
   }
+  return h;
+}
+
+
+// ---------------- 航线与星球 ----------------
+const PROFILE_TEXT: Record<string, string> = { rich: '资源较丰富', poor: '资源较少/偏科', barren: '几乎无矿产' };
+
+function routePanel(s: GameState): string {
+  const j = s.journey;
+  let h = `<h3>航线</h3><div class="note">本阶段航线：起始星球 → 随机星球 → 公共交易站。可以跳过不值得停靠的星球（需要更多燃料）。每颗星球的地图、矿点与原住民在开局时确定，读档不会刷新。</div>`;
+  h += `<table><tr><th>节点</th><th class="num">里程</th><th>状态</th></tr>`;
+  j.nodes.forEach((n, i) => {
+    const st = n.status === 'current' ? '<b>当前</b>' : n.status === 'visited' ? '已访问' : n.status === 'skipped' ? '已跳过' : i === j.dest ? '<b>航行目的地</b>' : '未到达';
+    h += `<tr><td>${esc(n.name)}${n.kind === 'station' ? ' <span class="tag">交易站</span>' : ''}</td><td class="num">${fmt(n.pos)} Mm</td><td>${st}</td></tr>`;
+  });
+  h += `</table>`;
+  // 当前星球
+  const P = s.planet;
+  if (s.phase === 'planet' && P) {
+    const node = j.nodes[j.current];
+    h += `<h3>${esc(P.name)}</h3><div class="note">情报：${esc(node.intel)}</div>`;
+    h += `<div>矿产：${esc(mineralStatus(P))}${P.scanned && mineralStatus(P).startsWith('调查后') ? '' : ''}</div>`;
+    if (P.scanned) h += `<div>资源类型线索：${PROFILE_TEXT[P.resourceProfile]}（据已扫描迹象判断）</div>`;
+    const N = P.natives;
+    h += `<h4>原住民</h4>`;
+    if (!P.scanned) h += `<div class="note">尚未扫描。</div>`;
+    else if (N.kind === 'none') h += `<div>未发现原住民。</div>`;
+    else if (N.kind === 'hostile') h += `<div class="badtext">${esc(N.name)}：明确拒绝接近。禁区（地图紫色区域）内的迹象与矿点不可进入或作业，小组会绕开；靠近禁区边缘作业可能收到驱逐警告。</div><div class="note">本阶段不实现战斗；可以绕开禁区，或提前离开。</div>`;
+    else {
+      h += `<div><b>${esc(N.name)}</b>：${N.contacted ? '<span class="ok">已建立联系</span>' : '尚未接触（小组调查地图上的「人工信号」后建立联系）'}</div>`;
+      if (N.contacted) {
+        h += `<h4>物资交易</h4><table>${N.trades
+          .map((t) => {
+            const w = A.canTrade(s, t.id);
+            return `<tr><td>${esc(tradeText(t))}</td><td class="num">剩 ${t.stock}</td><td>${sbtn('交易', 'trade', t.id, w)}${w ? `<br><span class="why">${esc(w)}</span>` : ''}</td></tr>`;
+          })
+          .join('')}</table>`;
+        const pw = A.canPermit(s);
+        h += `<h4>采矿许可</h4><div>领地内矿点：${P.deposits.filter((d) => d.zone === 'permit').map((d) => esc(d.name) + (d.discoveredBy != null ? '' : '（未确认）')).join('、') || '无'}</div>`;
+        h += N.permitGranted ? `<div class="ok">已取得许可，小组可前往领地内矿点作业。</div>` : `<div class="row">${sbtn(`协商采矿许可（${Object.entries(N.permitCost).map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`).join('、')}）`, 'permit', '', pw)}${pw ? `<span class="why">${esc(pw)}</span>` : ''}</div>`;
+      }
+    }
+    // 出发选项
+    h += `<h3>下一站</h3>`;
+    const opts = A.legOptions(s);
+    for (const o of opts) {
+      const risk = o.predict.remaining <= 180 ? '<span class="badtext">到达时灾变已很近</span>' : o.predict.remaining <= 360 ? '<span class="why">到达后可停留时间较短</span>' : '<span class="ok">到达后时间较充裕</span>';
+      h += `<div class="card"><div class="head"><b>${esc(o.node.name)}</b><span>${fmt(o.dist)} Mm · 航程约 ${fmtTime(o.travel)} · 燃料 ${o.fuel}</span></div>`;
+      h += `<div class="note">${esc(o.node.intel)}</div>`;
+      if (o.skips.length) h += `<div class="why">跳过：${esc(o.skips.join('、'))}</div>`;
+      h += `<div>预计 ${clockText(o.predict.arriveAt)} 到达；届时灰烬潮预计 <b>${fmtTime(o.predict.low)} ～ ${fmtTime(o.predict.high)}</b> 后抵达该处。${o.node.kind === 'station' ? '（交易站内灾变追赶暂停）' : risk}</div>`;
+      h += `<div>燃料：有 ${fmt(s.inventory.trainFuel)}，需 ${o.fuel}${s.inventory.trainFuel < o.fuel ? `，<span class="badtext">缺 ${fmt(o.fuel - s.inventory.trainFuel)}</span>` : `，到达后剩 ${fmt(s.inventory.trainFuel - o.fuel)}`}</div>`;
+      h += `<div class="row">${sbtn(`离站前往${o.node.name}`, 'departTo', o.index, o.block, 'primary')}${o.block ? `<span class="why">${esc(o.block)}</span>` : ''}</div>`;
+      const fw = A.canDepartTo(s, o.index, true);
+      if (!fw) h += `<div class="row">${sbtn('强行离站（遗留未归人员）', 'forceDepartAsk', o.index, '', 'danger')}<span class="note">严重行为：会遗留人员与运输机，全体敌意大增</span></div>`;
+      h += `</div>`;
+    }
+  } else if (s.phase === 'travel' && s.travel) {
+    const to = j.nodes[s.travel.to];
+    h += `<h3>航行中</h3><div>前往 ${esc(to.name)}：${fmt(s.travel.progress)}/${s.travel.duration} 分</div>${bar(s.travel.progress / s.travel.duration)}<div class="note">${esc(to.intel)}</div>`;
+  }
+  const visited = j.nodes.filter((n) => n.notes.length);
+  if (visited.length) h += `<h4>访问记录</h4><ul class="plain">${visited.map((n) => `<li>${esc(n.name)}：${esc(n.notes.join('；'))}</li>`).join('')}</ul>`;
   return h;
 }
 
 // ---------------- 交易站 ----------------
 function stationPanel(s: GameState): string {
-  if (!s.station.docked) return `<h3>公共交易站</h3><div class="note">尚未抵达。修复主驱动、制造轨道燃料、召回全员后离站，航行约 ${TRAIN.travelDuration / 60} 小时可抵达${STATION.name}。</div>`;
+  if (!s.station.docked) return `<h3>公共交易站</h3><div class="note">尚未抵达。${STATION.name}是本段航线的终点（见「航线」面板），抵达并完成一次补给或维修后可查看旅程总结。</div>`;
   let h = `<h3>${STATION.name}</h3><div>星币 <b>${fmt(s.credits, 1)}</b> <span class="note">（外部交易货币，与贡献点无关）</span></div>`;
   h += `<div class="note">停泊费：入港 ${STATION.dockingFee} 星币（已支付），之后每小时 ${STATION.hourlyFee} 星币（不足时以能源抵付）。站内禁止暴力。停泊期间暂停本列车的灾变追赶进度。</div>`;
   h += `<h4>补给（购买）</h4><table><tr><th>物品</th><th class="num">单价</th><th class="num">库存</th><th></th></tr>`;
@@ -443,8 +515,11 @@ export function summaryHtml(s: GameState): string {
   const raw = Object.entries(s.stats.rawDelivered).map(([k, v]) => `${ITEM_INFO[k as RawId].label} ${fmt(v ?? 0)}`).join('、') || '无';
   return `<h2>第一阶段完成</h2>
   <p>列车在${STATION.name}完成了补给与休整。灰烬潮仍在轨道后方，但这一程，大家都活了下来。</p>
+  <h4>航线记录</h4><ul class="plain">${s.journey.nodes
+    .map((n) => `<li>${esc(n.name)}：${n.kind === 'station' ? '终点' : n.status === 'skipped' ? '跳过' : esc(n.notes.join('；') || '已访问')}</li>`)
+    .join('')}</ul>
   <table>
-  <tr><td>用时</td><td>${fmtTime(s.time)}（离站于 ${clockText(s.stats.departedAt)}）</td></tr>
+  <tr><td>用时</td><td>${fmtTime(s.time)}（首次离站于 ${clockText(s.stats.departedAt)}）</td></tr>
   <tr><td>人口</td><td>${aboard}/30${s.stats.leftBehind ? `（遗留 ${s.stats.leftBehind} 人）` : '（无人遗留）'}</td></tr>
   <tr><td>情绪</td><td>士气 ${fmt(m.morale)} · 失望 ${fmt(m.disappointment)} · 敌意 ${fmt(m.hostility)}</td></tr>
   <tr><td>车体</td><td>${fmt(s.train.hull)}%</td></tr>

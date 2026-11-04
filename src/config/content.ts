@@ -161,7 +161,7 @@ export const PLANET_TEMPLATE = {
   signs: [
     { label: '冰晶迹象', guess: 'ice', dist: 16, angle: 200, hazard: 0, deposits: [{ resource: 'ice', name: '浅层冰晶床', reserve: 420, slots: 2 }] },
     { label: '铁矿迹象', guess: 'iron', dist: 24, angle: 320, hazard: 0.05, deposits: [{ resource: 'iron', name: '赤岩铁矿区', reserve: 360, slots: 3 }] },
-    { label: '铜矿迹象', guess: 'copper', dist: 30, angle: 70, hazard: 0.05, deposits: [{ resource: 'copper', name: '孔雀石沟', reserve: 160, slots: 1 }] },
+    { label: '铜矿迹象', guess: 'copper', dist: 30, angle: 70, hazard: 0.05, deposits: [{ resource: 'copper', name: '孔雀石沟', reserve: 200, slots: 2 }] },
     { label: '铜矿迹象', guess: 'copper', dist: 38, angle: 140, hazard: 0, deposits: [], emptyText: '迹象微弱，只是零散碎屑，没有可采矿点。' },
     { label: '辉晶迹象', guess: 'crystal', dist: 36, angle: 20, hazard: 0.25, deposits: [{ resource: 'crystal', name: '辉晶裂谷', reserve: 220, slots: 2 }] },
     { label: '生物迹象', guess: 'bio', dist: 33, angle: 250, hazard: 0.1, deposits: [{ resource: 'bio', name: '岩缝孢子群落', reserve: 10, slots: 1 }], eventId: 'beacon' },

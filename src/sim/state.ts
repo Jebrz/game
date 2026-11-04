@@ -1,10 +1,11 @@
 // 初始状态构建
 
 import { CATASTROPHE, GROUPS, HANGAR, POPULATION, ROBOTS, SAVE_VERSION, SHUTTLE_BUILD, SHUTTLE_COUNT, SHUTTLE_MODELS, START, TRAIN } from '../config/balance';
-import { GROUP_NAMES, PLANET_TEMPLATE, ROSTER } from '../config/content';
+import { GROUP_NAMES, ROSTER } from '../config/content';
+import { generateRoute } from './world';
 import { log, rand } from './core';
 import { reformGroups } from './groups';
-import type { GameState, Passenger, PlanetState, RawId, Shuttle, ShuttleModel, SkillId } from './types';
+import type { GameState, Passenger, Shuttle, ShuttleModel, SkillId } from './types';
 
 const SKILLS: SkillId[] = ['piloting', 'survey', 'mining', 'engineering', 'medical', 'research', 'logistics'];
 
@@ -31,10 +32,11 @@ export function createInitialState(seed = 20261104): GameState {
     hangar: { capacity: HANGAR.baseCapacity, level: 0 },
     shuttleSerial: 0,
     train: { hull: TRAIN.startHull, driveRepair: 0, driveRepaired: false, driveRepairTimer: 0, lifeSupport: 0.85 },
-    research: { done: [], current: null, progress: 0 },
+    research: { done: [], current: null, progress: 0, bank: 0 },
     policies: { rations: 'normal', workload: 'normal', reservePartsForDrive: true, basicRadius: 45, security: 'standby' },
     robots: { count: ROBOTS.count, condition: 90 },
-    catastrophe: { trueArrival: CATASTROPHE.trueArrival, bias: 0, warned: false, edgeWarned: false, arrived: false, chase: 0 },
+    catastrophe: { front: -CATASTROPHE.startGap, bias: 0, arrived: false, lastMilestone: 0 },
+    journey: { nodes: [], current: 0, dest: null, pos: 0 },
     recallActive: false,
     travel: null,
     station: { docked: false, feePaid: false, trades: 0, repairs: 0, summaryShown: false, arrivalTime: -1 },
@@ -47,7 +49,7 @@ export function createInitialState(seed = 20261104): GameState {
     failReason: '',
     edgePauseTriggered: false,
   };
-  s.catastrophe.bias = Math.round((rand(s) * 2 - 1) * CATASTROPHE.biasRange);
+  s.catastrophe.bias = (rand(s) * 2 - 1) * CATASTROPHE.biasRange;
 
   // 乘客：列车长 + 名单（5 名负责人 + 24 名乘客）
   const captain = makePassenger(s, '列车长（你）', 'general', {}, null, 70);
@@ -90,15 +92,20 @@ export function createInitialState(seed = 20261104): GameState {
       lastCargoFullRatio: 0,
       trips: 0,
       purchases: [],
+      loot: {},
+      lootResearch: 0,
+      pendingSwap: null,
     });
   }
-  s.planet = generatePlanet(s);
+  const route = generateRoute(s);
+  s.journey.nodes = route.nodes;
+  s.planet = route.first;
   for (const sh of s.shuttles) {
     sh.x = s.planet.trainX;
     sh.y = s.planet.trainY;
   }
   reformGroups(s);
-  log(s, 'system', '列车在古老轨道锚点上苏醒。灰岩星 K-7 就在窗外。');
+  log(s, 'system', `列车在古老轨道锚点上苏醒。灰岩星 K-7 就在窗外。航线：${s.journey.nodes.map((n) => n.name).join(' → ')}。`);
   return s;
 }
 
@@ -163,65 +170,4 @@ export function makeShuttle(s: GameState, name: string, model: ShuttleModel, dur
 
 export function serialText(n: number): string {
   return `${SHUTTLE_BUILD.serialPrefix}${String(n).padStart(2, '0')}`;
-}
-
-function generatePlanet(s: GameState): PlanetState {
-  const T = PLANET_TEMPLATE;
-  const p: PlanetState = {
-    name: T.name,
-    width: T.width,
-    height: T.height,
-    trainX: T.width / 2,
-    trainY: T.height / 2,
-    scanned: false,
-    scanProgress: -1,
-    signs: [],
-    deposits: [],
-    hazardZones: [],
-  };
-  for (const tpl of T.signs) {
-    const ang = ((tpl.angle + (rand(s) - 0.5) * 16) * Math.PI) / 180;
-    const d = tpl.dist * (0.92 + rand(s) * 0.16);
-    const x = clampTo(p.trainX + Math.cos(ang) * d, 6, T.width - 6);
-    const y = clampTo(p.trainY + Math.sin(ang) * d * 0.85, 6, T.height - 6);
-    const sign = {
-      id: s.nextId++,
-      label: tpl.label,
-      guess: tpl.guess,
-      x,
-      y,
-      radius: 7,
-      revealed: false,
-      explored: false,
-      exploringGroupId: null,
-      hazard: tpl.hazard,
-      eventId: tpl.eventId ?? null,
-      resultText: tpl.emptyText ?? '',
-    };
-    p.signs.push(sign);
-    if (tpl.hazard >= 0.15) p.hazardZones.push({ x, y, r: 9 });
-    tpl.deposits.forEach((dt, i) => {
-      const a = rand(s) * Math.PI * 2;
-      const r = 2 + rand(s) * 3.5 + i * 2;
-      p.deposits.push({
-        id: s.nextId++,
-        signId: sign.id,
-        resource: dt.resource as RawId,
-        name: dt.name,
-        x: x + Math.cos(a) * r,
-        y: y + Math.sin(a) * r,
-        reserve: dt.reserve,
-        initialReserve: dt.reserve,
-        slots: Array.from({ length: dt.slots }, () => ({ id: s.nextId++, holderGroupId: null, status: 'free' as const, reservedUntil: -1 })),
-        hazard: tpl.hazard,
-        discoveredBy: null,
-        discoveredAt: -1,
-      });
-    });
-  }
-  return p;
-}
-
-function clampTo(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
 }

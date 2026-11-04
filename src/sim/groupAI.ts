@@ -182,6 +182,10 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   for (const sign of P.signs) {
     if (!sign.revealed || sign.explored) continue;
     if (sign.exploringGroupId != null && sign.exploringGroupId !== g.id) continue;
+    if (sign.restricted) {
+      rejected.push(`${sign.label}位于${P.natives.name}禁区`);
+      continue;
+    }
     const d = dist(ox, oy, sign.x, sign.y);
     const back = dist(sign.x, sign.y, P.trainX, P.trainY);
     const et = exploreTime(s, g, sh);
@@ -194,7 +198,7 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
       rejected.push(`${sign.label}往返 ${fmtTime(t)} 超过灾变安全时限`);
       continue;
     }
-    const expected = 30 * unitPrice(s, sign.guess) + 25; // 发现价值的粗略估计
+    const expected = sign.kind === 'resource' ? 30 * unitPrice(s, sign.guess) + 25 : sign.kind === 'natives' ? 90 : 70; // 发现价值的粗略估计
     let score = expected / t;
     if (sh.model === 'scout') score *= 1.5;
     if (bold) score *= 1.15;
@@ -206,6 +210,14 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   // 采矿候选
   for (const dep of P.deposits) {
     if (dep.discoveredBy == null || dep.reserve <= 0 || dep.id === exclude) continue;
+    if (dep.zone === 'hostile') {
+      rejected.push(`${dep.name}位于敌对禁区`);
+      continue;
+    }
+    if (dep.zone === 'permit' && !P.natives.permitGranted) {
+      rejected.push(`${dep.name}在${P.natives.name}领地内，需要采矿许可`);
+      continue;
+    }
     if (free <= 0.5) continue;
     const d = dist(ox, oy, dep.x, dep.y);
     const back = dist(dep.x, dep.y, P.trainX, P.trainY);
@@ -394,6 +406,12 @@ function tickMining(s: GameState, g: Group, sh: Shuttle): void {
     victim.health = Math.max(5, victim.health - 8);
     log(s, 'danger', `${g.name}在${d.name}遭遇落石，运输机耐久 -5，${victim.name}受轻伤。`);
   }
+  const N = s.planet!.natives;
+  if (N.kind === 'hostile' && dist(d.x, d.y, N.x, N.y) < N.r + 6 && rand(s) < 0.01) {
+    sh.durability = Math.max(0, sh.durability - 4);
+    log(s, 'danger', `${g.name}在${d.name}收到${N.name}的驱逐警告射击，运输机耐久 -4，撤离返航。`);
+    return startReturn(s, g, sh, `遭到${N.name}驱逐警告，撤离`);
+  }
   const used = cargoUsed(sh);
   g.status = `正在${d.name}采集${ITEM_INFO[d.resource].label}（货舱 ${fmt(used)}/${cap}）`;
   const back = dist(sh.x, sh.y, s.planet!.trainX, s.planet!.trainY) * fuelPerKm(sh);
@@ -424,6 +442,27 @@ function tickExploring(s: GameState, g: Group, sh: Shuttle): void {
   const sign = P.signs.find((x) => x.id === g.target!.signId)!;
   sign.explored = true;
   sign.exploringGroupId = null;
+  if (sign.kind === 'natives') {
+    P.natives.contacted = true;
+    sign.resultText = `${P.natives.name}的聚落。双方以手势和图形完成了初步交流。`;
+    log(s, 'group', `${g.name}与${P.natives.name}建立联系！可在「航线」面板进行物资交易，或协商领地内的采矿许可。`);
+    s.toasts.push({ t: s.time, title: `与${P.natives.name}建立联系`, text: '可交易物资、协商采矿许可（「航线」面板）。' });
+    return reconsiderInField(s, g, sh, '接触完成');
+  }
+  if (sign.kind === 'ruin') {
+    const items = Object.entries(sign.loot).filter(([, v]) => (v ?? 0) > 0);
+    if (!sign.lootTaken && (items.length || sign.research > 0)) {
+      sign.lootTaken = true; // 只发一次
+      for (const [k, v] of items) g.loot[k as keyof typeof g.loot] = (g.loot[k as keyof typeof g.loot] ?? 0) + (v ?? 0);
+      g.lootResearch += sign.research;
+      const what = [...items.map(([k, v]) => `${ITEM_INFO[k as keyof typeof ITEM_INFO].label} ${v}`), ...(sign.research ? [`调查数据 ${sign.research} 研究点`] : [])].join('、');
+      log(s, 'group', `${g.name}调查${sign.label}：${sign.resultText} 取得 ${what}，返航后入库。`);
+      s.toasts.push({ t: s.time, title: '遗迹调查', text: `${g.name}找到：${what}` });
+      return startReturn(s, g, sh, '带着遗留物资返航');
+    }
+    log(s, 'group', `${g.name}调查${sign.label}：${sign.resultText}`);
+    return reconsiderInField(s, g, sh, '调查完成');
+  }
   const found = P.deposits.filter((d) => d.signId === sign.id);
   for (const d of found) {
     d.discoveredBy = g.id;
@@ -491,6 +530,14 @@ function arriveTrain(s: GameState, g: Group, sh: Shuttle): void {
   sh.y = s.planet!.trainY;
   for (const p of members(s, g)) p.aboard = true;
   g.trips++;
+  const loot = Object.entries(g.loot).filter(([, v]) => (v ?? 0) > 0);
+  if (loot.length || g.lootResearch > 0) {
+    for (const [k, v] of loot) s.inventory[k as keyof typeof s.inventory] += v ?? 0;
+    s.research.bank += g.lootResearch;
+    log(s, 'economy', `${g.name}带回遗留物资入库：${[...loot.map(([k, v]) => `${ITEM_INFO[k as keyof typeof ITEM_INFO].label} ${v}`), ...(g.lootResearch ? [`调查数据 ${g.lootResearch} 研究点（自动投入研究）`] : [])].join('、')}`);
+    g.loot = {};
+    g.lootResearch = 0;
+  }
   if (cargoUsed(sh) > 0 && !sh.cargo.settled) {
     setState(s, g, 'unloading', '卸货中');
     g.timer = GROUPS.unloadTime;

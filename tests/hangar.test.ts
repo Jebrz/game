@@ -15,6 +15,7 @@ import { deserialize, serialize } from '../src/sim/save';
 import { createInitialState } from '../src/sim/state';
 import { step } from '../src/sim/step';
 import type { GameState } from '../src/sim/types';
+import { toLegacy } from './legacy';
 
 /** 已开局、库存足够造两架运输机的状态 */
 function rich(seed = 3): GameState {
@@ -335,19 +336,8 @@ describe('存档', () => {
     for (let i = 0; i < 200; i++) step(s);
     s.inventory.ice = 6;
     A.enqueue(s, 'propellant', 2);
-    // 构造 v1 格式：删掉 v2 新字段
-    const v1 = JSON.parse(JSON.stringify(s));
-    delete v1.hangar;
-    delete v1.shuttleSerial;
-    v1.version = 1;
-    for (const sh of v1.shuttles) {
-      delete sh.serial;
-      delete sh.ownerGroupId;
-      delete sh.builtAt;
-    }
-    v1.queue = v1.queue.map((j: Record<string, unknown>) => ({ id: j.id, recipeId: j.recipeId, remaining: j.remaining, total: j.total, started: j.started }));
-    const loaded = deserialize(JSON.stringify({ version: 1, savedAt: '', gameTime: s.time, state: v1 }));
-    expect(loaded.version).toBe(2);
+    const loaded = deserialize(toLegacy(s, 1));
+    expect(loaded.version).toBe(3);
     expect(loaded.hangar.capacity).toBeGreaterThanOrEqual(loaded.shuttles.length);
     expect(loaded.shuttles.map((x) => x.serial)).toEqual(['TJ-01', 'TJ-02']);
     expect(loaded.shuttles.every((x) => x.ownerGroupId === null)).toBe(true);

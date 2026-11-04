@@ -1,34 +1,94 @@
 // 测试用脚本玩家：只调用与界面按钮相同的操作函数。
+// - expert：每 5 分钟操作，批量排产、用需求奖励精确引导、跳过无矿星、利用原住民。（最优脚本，不代表新手体验）
+// - novice：每 30 分钟看一次，按界面提示粗略操作：一次只排 1 项、不使用「提前」、不跳站，逼近预警时才离站。
 import * as A from '../src/sim/actions';
 import { stage } from '../src/sim/catastrophe';
-import { TRAIN } from '../src/config/balance';
-import type { GameState } from '../src/sim/types';
+import { SHUTTLE_BUILD, TRAIN } from '../src/config/balance';
+import { canSwap } from '../src/sim/hangar';
+import { nextLegFuel, rawShortfall } from '../src/sim/objectives';
+import type { GameState, RawId } from '../src/sim/types';
 
-export function autoPlayer(s: GameState, opts: { recallEarly?: boolean; noBonus?: boolean } = {}): void {
+export interface BotOpts {
+  style?: 'expert' | 'novice';
+  noBonus?: boolean; // 完全不调需求奖励的被动玩家
+  buildShuttle?: boolean; // 在起始星球尝试制造运输机
+}
+
+export function botInterval(o: BotOpts): number {
+  return o.style === 'novice' ? 30 : 5;
+}
+
+export function autoPlayer(s: GameState, opts: BotOpts = {}): void {
+  const novice = opts.style === 'novice';
   if (s.phase === 'intro') A.startGame(s);
-  if (s.phase === 'planet') {
+  if (s.phase === 'planet' && s.planet) {
+    const P = s.planet;
     if (!A.canScan(s)) A.startScan(s);
-    // 用需求奖励引导小组采集列车需要的原料
-    const partsLeft = s.train.driveRepaired ? 0 : TRAIN.driveRepairParts - s.train.driveRepair - s.inventory.parts;
-    if (!opts.noBonus) {
-      A.setDemandBonus(s, 'iron', partsLeft > 0 && s.inventory.iron < partsLeft * 4 ? 4 : 0);
-      A.setDemandBonus(s, 'copper', partsLeft > 0 && s.inventory.copper < partsLeft * 2 ? 4 : 0);
-      A.setDemandBonus(s, 'ice', s.inventory.ice < 20 ? 3 : 0);
-      A.setDemandBonus(s, 'crystal', s.inventory.trainFuel < TRAIN.fuelForDeparture && s.inventory.crystal < 30 ? 3 : 0);
-    }
-    if (!s.research.current) {
-      if (!A.canResearch(s, 'geneMining')) A.startResearch(s, 'geneMining');
-    }
     const queued = (id: string) => s.queue.filter((j) => j.recipeId === id).length;
-    const partsNeed = s.train.driveRepaired ? 2 : TRAIN.driveRepairParts - s.train.driveRepair;
-    if (s.inventory.parts + queued('parts') < partsNeed + 2 && !A.canEnqueue(s, 'parts')) A.enqueue(s, 'parts');
-    if (s.inventory.trainFuel + queued('trainFuel') < TRAIN.fuelForDeparture && !A.canEnqueue(s, 'trainFuel')) A.enqueue(s, 'trainFuel');
-    if (s.inventory.propellant + queued('propellant') * 6 < 50 && !A.canEnqueue(s, 'propellant')) A.enqueue(s, 'propellant');
+    const need = nextLegFuel(s);
+    const partsLeft = s.train.driveRepaired ? 0 : TRAIN.driveRepairParts - s.train.driveRepair;
+    // 需求奖励：按「还缺」提示引导
+    if (!opts.noBonus) {
+      const short = rawShortfall(s);
+      const want: Record<RawId, number> = { iron: 0, copper: 0, ice: 0, crystal: 0, bio: 0 };
+      for (const k of Object.keys(short.parts) as RawId[]) want[k] = novice ? 3 : 4;
+      for (const k of Object.keys(short.fuel) as RawId[]) want[k] = novice ? 3 : 4;
+      if (s.inventory.propellant < 30 || s.inventory.ice < 15) want.ice = Math.max(want.ice, 3);
+      // 想造运输机时：照着下单按钮上显示的缺项提高对应原料的奖励（新手也能看到；零件折算为铁矿 4 + 铜矿 2）
+      if (opts.buildShuttle && s.journey.current === 0 && !s.shuttles.some((x) => x.builtAt >= 0) && !s.queue.some((j) => j.kind === 'shuttle')) {
+        const it = SHUTTLE_BUILD.items;
+        const partsGap = Math.max(0, (it.parts ?? 0) + partsLeft - s.inventory.parts);
+        const gap: Partial<Record<RawId, number>> = {
+          iron: (it.iron ?? 0) + partsGap * 4 - s.inventory.iron,
+          copper: (it.copper ?? 0) + partsGap * 2 - s.inventory.copper,
+          crystal: (it.crystal ?? 0) + need * 3 - s.inventory.crystal,
+        };
+        for (const k of Object.keys(gap) as RawId[]) if ((gap[k] ?? 0) > 0) want[k] = Math.max(want[k], 3);
+      }
+      for (const r of Object.keys(want) as RawId[]) A.setDemandBonus(s, r, want[r]);
+    }
+    if (!s.research.current && !A.canResearch(s, 'geneMining')) A.startResearch(s, 'geneMining');
+    // 排产
+    const maxQ = novice ? 3 : 12;
+    const add = (id: string, n: number) => {
+      if (s.queue.length >= maxQ) return;
+      if (!A.canEnqueue(s, id, n)) A.enqueue(s, id, n);
+      else if (n > 1 && !A.canEnqueue(s, id, 1)) A.enqueue(s, id, 1);
+    };
+    const shuttleExtra = opts.buildShuttle && s.journey.current === 0 && !s.shuttles.some((x) => x.builtAt >= 0) && !s.queue.some((j) => j.kind === 'shuttle') ? 5 : 0;
+    const partsWant = partsLeft + shuttleExtra - s.inventory.parts - queued('parts');
+    if (partsWant > 0) add('parts', novice ? 1 : Math.min(5, partsWant));
+    const fuelWant = need + (novice ? 0 : 2) - s.inventory.trainFuel - queued('trainFuel');
+    if (fuelWant > 0) add('trainFuel', novice ? 1 : Math.min(5, fuelWant));
+    if (s.inventory.propellant + queued('propellant') * 6 < (novice ? 30 : 45)) add('propellant', 1);
     if (!A.canRepairDrive(s)) A.repairDrive(s);
-    const ready = s.train.driveRepaired && s.inventory.trainFuel >= TRAIN.fuelForDeparture;
+    // 起始星球：尝试制造运输机，完工后分配给小组换机
+    if (opts.buildShuttle && s.journey.current === 0 && s.train.driveRepaired && stage(s) === 'far' && !A.canOrderShuttle(s, null).length) {
+      if (!s.shuttles.some((x) => x.builtAt >= 0 && x.ownerGroupId == null)) A.captainOrderShuttle(s);
+    }
+    for (const sp of s.shuttles.filter((x) => x.assignedTo === 'spare' && x.ownerGroupId == null)) {
+      const g = [...s.groups].sort((a, b) => (s.shuttles.find((x) => x.id === a.shuttleId)?.durability ?? 0) - (s.shuttles.find((x) => x.id === b.shuttleId)?.durability ?? 0))[0];
+      if (g && !canSwap(s, g, sp, 'captain')) A.captainSwap(s, g.id, sp.id);
+      else if (g && !A.canScheduleSwap(s, g, sp)) A.captainScheduleSwap(s, g.id, sp.id);
+    }
+    // 原住民
+    if (P.natives.kind === 'friendly' && P.natives.contacted) {
+      if (!novice && !A.canPermit(s)) A.grantPermit(s);
+      if (s.inventory.trainFuel + queued('trainFuel') < need && !A.canTrade(s, 'fuel')) A.trade(s, 'fuel');
+    }
+    // 离站：逼近预警（或燃料与目标完成后）时召回，然后前往下一站（expert 会跳过已知无矿的星球）
     const st = stage(s);
-    if ((opts.recallEarly && ready) || st === 'edge' || st === 'impact') A.setRecall(s, true);
-    if (s.recallActive && !A.canDepart(s)) A.depart(s);
+    const ready = s.train.driveRepaired && s.inventory.trainFuel >= need;
+    const leave = st === 'edge' || st === 'impact' || (ready && st === 'warn');
+    if (leave) A.setRecall(s, true);
+    if (s.recallActive) {
+      let dest = s.journey.current + 1;
+      if (!novice) {
+        const n = s.journey.nodes[dest];
+        if (n && n.kind === 'planet' && n.intel.startsWith('几乎没有矿物') && !A.canDepartTo(s, dest + 1)) dest += 1;
+      }
+      if (!A.canDepartTo(s, dest)) A.departTo(s, dest);
+    }
   }
   if (s.phase === 'station') {
     if (!A.canBuy(s, 'food', 10)) A.buy(s, 'food', 10);

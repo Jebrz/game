@@ -1,11 +1,10 @@
 // 玩家（列车长）操作。每个操作配一个 canX 返回禁用原因（空字符串表示可用）。
 
-import { DEMAND_BONUS, GROUPS, MOOD, RAW_BASE_PRICE, STATION, TRAIN, TIME, SURVIVAL } from '../config/balance';
+import { DEMAND_BONUS, GROUPS, RAW_BASE_PRICE, STATION, TRAIN, TIME, SURVIVAL } from '../config/balance';
 import { ITEM_INFO, PROFESSION_INFO, RECIPES, RESEARCH } from '../config/content';
-import { consume, fmt, groupShuttle, log, members, missingItems, newId } from './core';
-import { isHome, reformGroups, setState } from './groups';
-import { releaseAllOf } from './claims';
-import { cancelOrder, insertJob, orderShuttle, swapShuttle } from './hangar';
+import { consume, fmt, log, missingItems, newId } from './core';
+import { reformGroups } from './groups';
+import { cancelOrder, cancelScheduledSwap, insertJob, orderShuttle, scheduleSwap, swapShuttle } from './hangar';
 import { cargoUsed } from './shuttles';
 import type { GameState, ItemId, Policies, Profession, RawId } from './types';
 
@@ -82,7 +81,16 @@ export function captainSwap(s: GameState, groupId: number, shId: number): void {
   const sh = s.shuttles.find((x) => x.id === shId);
   if (g && sh) swapShuttle(s, g, sh, 'captain', '');
 }
-export { assignCaptain, canAssignCaptain, canExpandHangar, canMoveToFront, canOrderShuttle, canSwap, expandHangar, moveToFront, releaseShuttle } from './hangar';
+export function captainScheduleSwap(s: GameState, groupId: number, shId: number): void {
+  const g = s.groups.find((x) => x.id === groupId);
+  const sh = s.shuttles.find((x) => x.id === shId);
+  if (g && sh) scheduleSwap(s, g, sh);
+}
+export function captainCancelSwap(s: GameState, groupId: number): void {
+  const g = s.groups.find((x) => x.id === groupId);
+  if (g) cancelScheduledSwap(s, g);
+}
+export { assignCaptain, canAssignCaptain, canExpandHangar, canMoveToFront, canScheduleSwap, canOrderShuttle, canSwap, expandHangar, moveToFront, releaseShuttle } from './hangar';
 
 // ---------- 主驱动 ----------
 export function canRepairDrive(s: GameState): string {
@@ -173,62 +181,8 @@ export function setRecall(s: GameState, on: boolean): void {
   log(s, on ? 'danger' : 'system', on ? '列车长发出紧急召回令：所有小组立即返航。' : '列车长解除召回令，小组恢复自主行动。');
 }
 
-export function outsideGroups(s: GameState) {
-  return s.groups.filter((g) => !isHome(g));
-}
-
-export function canDepart(s: GameState): string {
-  if (s.phase !== 'planet') return '不在星球停靠中';
-  const r: string[] = [];
-  if (!s.train.driveRepaired) r.push(s.train.driveRepairTimer > 0 ? '主驱动维修中' : '主驱动未修复');
-  if (s.inventory.trainFuel < TRAIN.fuelForDeparture) r.push(`轨道燃料不足（需 ${TRAIN.fuelForDeparture}，有 ${fmt(s.inventory.trainFuel)}）`);
-  const out = outsideGroups(s);
-  if (out.length) r.push(`尚有小组未归：${out.map((g) => `${g.name}（${g.status}）`).join('、')}`);
-  return r.join('；');
-}
-/** 强行离站：仅在机械条件满足、但有人员未归时可用，属于严重行为 */
-export function canForceDepart(s: GameState): string {
-  if (s.phase !== 'planet') return '不在星球停靠中';
-  if (!s.train.driveRepaired) return '主驱动未修复';
-  if (s.inventory.trainFuel < TRAIN.fuelForDeparture) return '轨道燃料不足';
-  if (!outsideGroups(s).length) return '所有人员已归队，无需强行离站';
-  return '';
-}
-
-export function depart(s: GameState, force = false): void {
-  if (force ? canForceDepart(s) : canDepart(s)) return;
-  s.inventory.trainFuel -= TRAIN.fuelForDeparture;
-  const left: string[] = [];
-  for (const g of outsideGroups(s)) {
-    for (const p of members(s, g)) {
-      p.leftBehind = true;
-      p.groupId = null;
-      left.push(p.name);
-    }
-    const sh = groupShuttle(s, g);
-    if (sh) s.shuttles = s.shuttles.filter((x) => x.id !== sh.id);
-    g.memberIds = [];
-    g.shuttleId = null;
-    g.target = null;
-    setState(s, g, 'grounded', '成员被遗留在星球上');
-  }
-  if (left.length) {
-    s.stats.leftBehind += left.length;
-    for (const p of s.passengers) if (!p.leftBehind && !p.isCaptain) p.hostility = Math.min(100, p.hostility + MOOD.leftBehindHostility);
-    s.boosts.push({ label: '同伴被遗弃', until: s.time + 2880, morale: -12 });
-    log(s, 'danger', `列车强行离站，遗留 ${left.length} 人：${left.join('、')}。乘客敌意急剧上升。`);
-  }
-  for (const g of s.groups) {
-    releaseAllOf(s, g.id);
-    if (g.memberIds.length) setState(s, g, 'docked', '列车航行中，随车待命');
-  }
-  s.recallActive = false;
-  s.phase = 'travel';
-  s.travel = { progress: 0, duration: TRAIN.travelDuration };
-  s.stats.departedAt = s.time;
-  log(s, 'system', `列车离开${s.planet!.name}，沿古老轨道驶向${STATION.name}（预计 ${TRAIN.travelDuration / 60} 小时）。`);
-  s.toasts.push({ t: s.time, title: '离站', text: `列车驶向${STATION.name}。` });
-}
+// 离站与航线选择见 journey.ts
+export { canDepart, canDepartTo, canForceDepart, depart, departTo, legOptions, outsideGroups } from './journey';
 
 // ---------- 交易站 ----------
 export function canBuy(s: GameState, item: ItemId, qty: number): string {
@@ -308,3 +262,6 @@ export function cargoTotal(s: GameState): number {
   return s.shuttles.reduce((a, sh) => a + cargoUsed(sh), 0);
 }
 
+
+// ---------- 原住民 ----------
+export { canPermit, canTrade, grantPermit, trade } from './natives';

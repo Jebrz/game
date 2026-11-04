@@ -3,7 +3,7 @@
 
 import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
 
-export const SAVE_VERSION = 2; // v2：运输机制造与机库（v1 存档读取时自动升级）
+export const SAVE_VERSION = 3; // v3：多星球航线与灾变前锋；v2 运输机制造与机库（旧存档读取时自动升级）
 
 export const TIME = {
   minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟
@@ -76,8 +76,8 @@ export const SHUTTLE_UPGRADES: UpgradeSpec[] = [
 // 工时按标准效率计，实际速度 = 工时 / 加工速度倍率（工程人员），与其他加工共用同一条生产线和能耗。
 export const SHUTTLE_BUILD = {
   model: 'hauler' as ShuttleModel,
-  items: { parts: 6, iron: 16, copper: 8, crystal: 4 } as Partial<Record<ItemId, number>>,
-  time: 150,
+  items: { parts: 5, iron: 10, copper: 6, crystal: 4 } as Partial<Record<ItemId, number>>,
+  time: 120,
   groupPoints: 160, // 小组订购时支付的贡献点（另需同样的材料）
   serialPrefix: 'TJ-',
 };
@@ -160,24 +160,35 @@ export const ROBOTS = {
   deterrencePer: 10,
 };
 
+// 灾变「灰烬潮」：前锋沿航线追赶列车。推进速度由慢到快（平滑加速，不会突然跳变）。
+// 速度 v(t) = v0 + (v1 - v0) * smoothstep(t / rampMinutes)，单位 Mm/分钟；列车航速固定且始终快于前锋。
 export const CATASTROPHE = {
-  trueArrival: 960, // 真实到达（游戏分钟，自开局）
-  biasRange: 60, // 预测中心偏差
+  startGap: 950, // 开局时前锋落后起始星球的里程（Mm）；按此曲线约第 1640 分钟抵达起始星球
+  v0: 0.3, // 初速（Mm/分钟）
+  v1: 1.2, // 加速完成后的速度
+  rampMinutes: 2400, // 从 v0 平滑加速到 v1 所需游戏分钟
+  milestones: [0.35, 0.65, 0.9], // 加速进度提示点（占加速过程的比例）
+  biasRange: 0.12, // 预测偏差（占剩余时间比例，随接近缩小）
   minUncertainty: 20,
-  uncertaintyFrac: 0.22,
+  uncertaintyFrac: 0.18,
   warnAt: 300, // 预测最早到达小于此值：逼近预警
   edgeAt: 120, // 预测最早到达小于此值：危险边缘（首次自动暂停）
   hullDamagePerMin: 0.6,
   outsideHealthPerMin: 0.8,
   shuttleWearPerMin: 1.5,
-  chasePerMinTravel: 0.02, // 离站后追赶进度每分钟增长（%）
+};
+
+// 航线：起始星球 + 1～2 颗随机星球 + 公共交易站（本阶段短版）
+export const ROUTE = {
+  extraPlanets: [1, 2] as [number, number],
+  legDistance: [360, 470] as [number, number], // 相邻节点间里程（Mm）
+  trainSpeed: 3, // 列车航速（Mm/分钟）
+  mmPerFuel: 40, // 每单位轨道燃料可航行的里程
 };
 
 export const TRAIN = {
   driveRepairParts: 8,
   driveRepairTime: 60,
-  fuelForDeparture: 10,
-  travelDuration: 240,
   scanTime: 20,
   scanEnergy: 40,
   startHull: 82,

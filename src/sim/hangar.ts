@@ -255,7 +255,14 @@ export function completeJob(s: GameState, j: ProcessJob): void {
 // ---------------- 换机与配属 ----------------
 
 /** 换机前提：小组在车上且不在卸货、旧机已停靠且货舱已清空、新机为停靠的备用机 */
+/** 该备用机是否已被安排给某个小组换装 */
+export function reservedBy(s: GameState, sh: Shuttle): Group | null {
+  return s.groups.find((g) => g.pendingSwap === sh.id) ?? null;
+}
+
 export function canSwap(s: GameState, g: Group, next: Shuttle, by: 'captain' | 'group'): string {
+  const rsv = reservedBy(s, next);
+  if (rsv && rsv.id !== g.id) return `已安排给${rsv.name}换装`;
   if (by === 'captain' && next.ownerGroupId != null) return `${next.name}由${s.groups.find((x) => x.id === next.ownerGroupId)?.name ?? '其他小组'}出资，只能由该组领取`;
   if (by === 'group' && next.ownerGroupId != null && next.ownerGroupId !== g.id) return '该机属于其他小组';
   if (next.assignedTo !== 'spare') return `${next.name}不是备用机`;
@@ -269,6 +276,45 @@ export function canSwap(s: GameState, g: Group, next: Shuttle, by: 'captain' | '
     if (cargoUsed(old) > 0.01 && !old.cargo.settled) return `${old.name}货舱尚未卸空`;
   }
   return '';
+}
+
+/** 预约换装：小组出勤/卸货中时，列车长可预约，返航卸货后自动换装（只能预约公共备用机） */
+export function canScheduleSwap(s: GameState, g: Group, next: Shuttle): string {
+  if (g.pendingSwap === next.id) return '已预约';
+  if (next.ownerGroupId != null) return `${next.name}由小组出资，只能由该组领取`;
+  if (next.assignedTo !== 'spare') return `${next.name}不是备用机`;
+  const rsv = reservedBy(s, next);
+  if (rsv) return `已安排给${rsv.name}换装`;
+  if (g.pendingSwap != null) return `${g.name}已有预约`;
+  if (!g.memberIds.length) return `${g.name}编组不足`;
+  if (!canSwap(s, g, next, 'captain')) return '现在即可直接换机';
+  return '';
+}
+
+export function scheduleSwap(s: GameState, g: Group, next: Shuttle): void {
+  if (canScheduleSwap(s, g, next)) return;
+  g.pendingSwap = next.id;
+  log(s, 'group', `列车长安排${g.name}返航卸货后换装${next.name}（该机已为其保留）。`);
+}
+
+export function cancelScheduledSwap(s: GameState, g: Group): void {
+  if (g.pendingSwap == null) return;
+  const sh = s.shuttles.find((x) => x.id === g.pendingSwap);
+  g.pendingSwap = null;
+  log(s, 'group', `列车长取消了${g.name}的换装安排${sh ? `（${sh.name}恢复为公共备用）` : ''}。`);
+}
+
+/** 小组在列车上时执行已预约的换装；条件不再成立（例如该机已被配属）时取消预约 */
+export function applyScheduledSwap(s: GameState, g: Group): boolean {
+  if (g.pendingSwap == null) return false;
+  const sh = s.shuttles.find((x) => x.id === g.pendingSwap);
+  if (!sh || sh.assignedTo !== 'spare' || sh.ownerGroupId != null) {
+    g.pendingSwap = null;
+    return false;
+  }
+  if (canSwap(s, g, sh, 'captain')) return false;
+  g.pendingSwap = null;
+  return swapShuttle(s, g, sh, 'captain', '');
 }
 
 /** 执行换机：旧机转为备用（保留归属、升级、耐久与燃料），不销毁 */
@@ -294,6 +340,8 @@ export function canAssignCaptain(s: GameState, shId: number): string {
   if (!sh) return '无此运输机';
   if (sh.assignedTo === 'captain') return '已配属列车长';
   if (sh.ownerGroupId != null) return `由${s.groups.find((g) => g.id === sh.ownerGroupId)?.name ?? '小组'}出资，列车长无权征用`;
+  const rsv = reservedBy(s, sh);
+  if (rsv) return `已安排给${rsv.name}换装（可先取消安排）`;
   const g = s.groups.find((x) => x.shuttleId === shId);
   if (g && !isHome(g)) return `${g.name}正在使用（出勤中）`;
   if (g && g.state === 'unloading') return `${g.name}正在卸货`;
@@ -336,6 +384,7 @@ export function releaseShuttle(s: GameState, shId: number): void {
 /** 小组在列车上时调用：先处理本组新机，再判断是否需要订购。返回是否做了决定。 */
 export function groupConsiderShuttle(s: GameState, g: Group): boolean {
   if (!g.memberIds.length) return false;
+  if (applyScheduledSwap(s, g)) return true;
   const main = s.shuttles.find((x) => x.id === g.shuttleId) ?? null;
   // 1) 领取或换装本组出资的新机
   for (const sp of ownedSpares(s, g)) {
