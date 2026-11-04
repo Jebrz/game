@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
-// GitHub Pages 项目站点部署在 https://<用户>.github.io/game/ 下，
-// 因此构建产物使用 /game/ 作为基础路径；本地开发仍使用根路径。
+// 生产构建使用 /game/ 基础路径（与原 GitHub Pages 项目站点一致），
+// 本地开发仍使用根路径。本分支不自动发布。
 export default defineConfig(({ command, isPreview }) => ({
   base: command === 'build' || isPreview ? '/game/' : '/',
   build: {

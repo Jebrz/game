@@ -134,7 +134,7 @@ export const ROBOTS = {
 };
 
 export const CATASTROPHE = {
-  trueArrival: 900, // 真实到达（游戏分钟，自开局）
+  trueArrival: 960, // 真实到达（游戏分钟，自开局）
   biasRange: 60, // 预测中心偏差
   minUncertainty: 20,
   uncertaintyFrac: 0.22,
@@ -168,7 +168,7 @@ export const GENE = {
   minHealth: 60,
   maxFatigue: 70,
   loadLimit: 1, // 本阶段每人可承载序列数
-  recovery: 150,
+  recovery: 90,
   miningBonus: 20,
   requiresResearch: 'geneMining',
 };

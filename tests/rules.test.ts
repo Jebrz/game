@@ -272,4 +272,42 @@ describe('自主小组', () => {
     const ps = s.passengers.filter((p) => !p.isCaptain);
     expect(moodSummary(s).morale).toBeCloseTo(ps.reduce((a, p) => a + p.morale, 0) / ps.length);
   });
+  it('列车长配属运输机：原小组停飞、总数不变；释放后归还', () => {
+    const s = started();
+    const g = s.groups[0];
+    const shId = g.shuttleId!;
+    expect(A.canAssignCaptain(s, shId)).toBe('');
+    A.assignCaptain(s, shId);
+    expect(g.shuttleId).toBeNull();
+    expect(s.shuttles.length).toBe(2);
+    for (let i = 0; i < 30; i++) step(s);
+    expect(g.state).toBe('grounded');
+    expect(g.status).toContain('运输机');
+    A.releaseShuttle(s, shId);
+    expect(g.shuttleId).toBe(shId);
+  });
+});
+
+describe('离站', () => {
+  it('强行离站遗留未归人员，敌意上升；不会凭空保留其运输机', async () => {
+    const { moodSummary } = await import('../src/sim/survival');
+    const s = started(2);
+    for (let i = 0; i < 120; i++) {
+      if (s.time % 5 === 0) autoPlayer(s);
+      step(s);
+    }
+    s.train.driveRepaired = true;
+    s.inventory.trainFuel = 10;
+    const out = A.outsideGroups(s);
+    expect(out.length).toBeGreaterThan(0);
+    expect(A.canDepart(s)).toContain('尚有小组未归');
+    expect(A.canForceDepart(s)).toBe('');
+    const before = moodSummary(s).hostility;
+    A.depart(s, true);
+    expect(s.phase).toBe('travel');
+    expect(s.stats.leftBehind).toBeGreaterThan(0);
+    expect(s.shuttles.length).toBe(2 - out.length);
+    expect(moodSummary(s).hostility).toBeGreaterThan(before + 20);
+    expect(s.inventory.trainFuel).toBe(0);
+  });
 });

@@ -13,6 +13,7 @@ import type { Deposit, GameState, Group, RawId, Shuttle, Sign } from './types';
 
 const IDLE_FUEL_PER_MIN = 0.03;
 const SAFETY_FUEL = 1.5;
+const PROPELLANT_ALERT = 30; // 列车推进剂低于此值时小组优先考虑冰晶（原型参数）
 
 export function tickGroups(s: GameState): void {
   for (const g of s.groups) tickGroup(s, g);
@@ -112,10 +113,10 @@ function thinkAtTrain(s: GameState, g: Group): void {
     if (g.decisions[0]?.text !== choice.blocked) decide(s, g, choice.blocked);
     return;
   }
-  // 出发：列车承担基本任务的推进剂补给；超出基本半径由小组额度支付
-  const refill = tank(sh!) - sh!.fuel;
+  // 出发：列车承担基本任务的推进剂补给（库存不足时只补到现有量）；超出基本半径由小组额度支付
+  const refill = Math.min(tank(sh!) - sh!.fuel, s.inventory.propellant);
   s.inventory.propellant -= refill;
-  sh!.fuel = tank(sh!);
+  sh!.fuel += refill;
   if (choice.extraCost > 0) {
     g.points -= choice.extraCost;
     g.pointsSpent += choice.extraCost;
@@ -159,7 +160,8 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   const bold = leaderPersonality(s, g) === 'bold';
   const spd = speed(sh);
   const fpk = fuelPerKm(sh);
-  const fuelAvail = atTrain ? tank(sh) : sh.fuel;
+  const fuelAvail = atTrain ? Math.min(tank(sh), sh.fuel + s.inventory.propellant) : sh.fuel;
+  const fuelLow = s.inventory.propellant < PROPELLANT_ALERT;
   const free = cargoCap(sh) - cargoUsed(sh);
   const est = estimate(s);
   const margin = bold ? 15 : 45;
@@ -223,11 +225,15 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
     score *= 1 - clamp(riskPenalty(dep.hazard), 0, 0.8);
     if (!own && avail <= 0) score *= 0.35; // 可能需要等待位置
     if (own) score *= 1.2; // 已保留的位置
+    if (fuelLow && dep.resource === 'ice') score *= 2.5; // 推进剂告急关系到本组能否出勤
     const extra = atTrain ? extraCost(s, dist(P.trainX, P.trainY, dep.x, dep.y)) : 0;
     cands.push({ kind: 'mine', deposit: dep, score, why: '', extraCost: extra, blocked: '', dist: d });
   }
 
   if (!cands.length) {
+    if (atTrain && fuelAvail < tank(sh) * 0.5 && rejected.some((r) => r.includes('油量'))) {
+      return { kind: 'mine', score: 0, why: '', extraCost: 0, dist: 0, blocked: `列车运输机推进剂不足（可用 ${fmt(fuelAvail, 1)}），无法到达任何目标` };
+    }
     if (rejected.length) g.reason = `无可行目标：${rejected.slice(0, 2).join('；')}`;
     else g.reason = s.planet!.signs.some((x) => x.revealed && !x.explored) ? '其他迹象已有小组在探索' : '没有已知的可采矿点或待探索迹象';
     return null;
@@ -241,13 +247,7 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   affordable.sort((a, b) => b.score - a.score);
   const best = affordable[0];
   best.why = explain(s, g, sh, best, affordable, bold);
-  // 推进剂检查（列车承担）
-  if (atTrain) {
-    const refill = tank(sh) - sh.fuel;
-    if (s.inventory.propellant < refill) {
-      return { ...best, blocked: `列车运输机推进剂不足（补满需 ${fmt(refill, 1)}，库存 ${fmt(s.inventory.propellant, 1)}）` };
-    }
-  }
+  if (atTrain && fuelAvail < tank(sh) - 0.01) best.why += `，推进剂紧张（可用 ${fmt(fuelAvail, 1)}），只做近程任务`;
   return best;
 }
 
@@ -267,6 +267,7 @@ function explain(s: GameState, g: Group, sh: Shuttle, c: Choice, all: Choice[], 
     const r = d.resource;
     bits.push(`前往${d.name}采集${ITEM_INFO[r].label}`);
     if (s.demandBonus[r] > 0) bits.push(`响应列车需求奖励（${unitPrice(s, r)} 点/单位）`);
+    if (r === 'ice' && s.inventory.propellant < PROPELLANT_ALERT) bits.push('列车推进剂告急，关系本组能否出勤，优先采冰晶');
     const richer = all.find((o) => o !== c && o.kind === 'mine' && o.deposit!.resource !== r && o.dist > c.dist + 8);
     if (richer) bits.push('选择较近矿点以降低运输成本');
     if (heldSlot(d, g.id)) bits.push('回到本组保留的作业位置');

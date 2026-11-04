@@ -1,8 +1,8 @@
 name: 部署到 GitHub Pages
 
+# 星空列车开发分支：不自动发布，避免覆盖现有公开部署（地下城游戏）。
+# 需要发布时由仓库维护者在 Actions 页面手动运行。
 on:
-  push:
-    branches: [claude/serene-ritchie-qv18mk, main]
   workflow_dispatch:
 
 permissions:
