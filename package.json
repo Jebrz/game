@@ -1,12 +1,14 @@
 {
-  "name": "pixel-dungeon-cn",
-  "version": "0.1.0",
-  "description": "浏览器 2D 俯视角像素地下城游戏",
+  "name": "star-train-cn",
+  "version": "0.2.0",
+  "description": "中文单人星空列车生存经营游戏（第一阶段原型）",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run"
   },
   "repository": {
     "type": "git",
@@ -16,12 +18,10 @@
     "url": "https://github.com/Jebrz/game/issues"
   },
   "homepage": "https://github.com/Jebrz/game#readme",
-  "dependencies": {
-    "phaser": "^3.90.0"
-  },
   "devDependencies": {
     "typescript": "5.6",
-    "vite": "^6.4.5"
+    "vite": "^6.4.5",
+    "vitest": "^2.1.9"
   },
   "private": true,
   "type": "module"

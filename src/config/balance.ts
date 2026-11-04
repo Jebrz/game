@@ -1,0 +1,201 @@
+// 原型数值参数 —— 全部为可调整的测试值，不是最终平衡设定。
+// 时间单位：游戏分钟；距离单位：km；速度 km/分钟。
+
+import type { ItemId, Profession, RawId, ShuttleModel } from '../sim/types';
+
+export const SAVE_VERSION = 1;
+
+export const TIME = {
+  minutesPerRealSecond: 2, // 1× 速度下每真实秒推进的游戏分钟
+  speeds: [1, 2, 4, 8],
+  maxStepsPerFrame: 80,
+  autosaveEveryMinutes: 60,
+};
+
+export const POPULATION = {
+  total: 30,
+};
+
+export const GROUPS = {
+  count: 2, // 可出勤小组数量
+  defaultRequirement: { pilot: 1, surveyor: 1, miner: 2 } as Partial<Record<Profession, number>>,
+  maxRequirementPerProfession: 3,
+  minHealthToSortie: 45,
+  restFatigue: 65, // 平均疲劳高于此值时休整
+  restDoneFatigue: 25,
+  waitSlotMax: 40, // 等待作业位置最长分钟，之后重新评估
+  deployTime: 5,
+  unloadTime: 6,
+  prepTime: 4,
+  decisionLogMax: 8,
+};
+
+// 列车必须保留的基本运营人员（按职业）
+export const TRAIN_MIN_STAFF: Partial<Record<Profession, number>> = {
+  engineer: 2,
+  logistics: 2,
+  medic: 1,
+};
+
+export const SHUTTLE_COUNT = 2; // 本阶段运输机总数（不会凭空生成）
+
+export interface ShuttleModelSpec {
+  label: string;
+  cargo: number; // 运载量（单位）
+  mineRate: number; // 每分钟采矿量（基础）
+  speed: number; // km/分钟
+  fuelPerKm: number; // 推进剂/km
+  tank: number; // 推进剂容量
+  exploreTime: number; // 探索所需分钟
+  wearPerTrip: number;
+}
+
+export const SHUTTLE_MODELS: Record<ShuttleModel, ShuttleModelSpec> = {
+  hauler: { label: '运输型', cargo: 60, mineRate: 1.0, speed: 2.0, fuelPerKm: 0.12, tank: 20, exploreTime: 30, wearPerTrip: 3 },
+  miner: { label: '采集型', cargo: 45, mineRate: 1.5, speed: 1.6, fuelPerKm: 0.14, tank: 20, exploreTime: 32, wearPerTrip: 3 },
+  scout: { label: '探索型', cargo: 32, mineRate: 0.8, speed: 2.6, fuelPerKm: 0.10, tank: 22, exploreTime: 18, wearPerTrip: 2.5 },
+};
+
+export interface UpgradeSpec {
+  id: string;
+  label: string;
+  desc: string;
+  points: number; // 贡献点（小组支付）
+  items: Partial<Record<ItemId, number>>; // 消耗列车库存
+  cargoBonus?: number;
+  mineRateMult?: number;
+}
+
+// 运输机升级（小组以贡献点购买，同时消耗列车实际库存）
+export const SHUTTLE_UPGRADES: UpgradeSpec[] = [
+  { id: 'cargoBay', label: '扩容货舱', desc: '运载量 +20', points: 110, items: { parts: 2 }, cargoBonus: 20 },
+  { id: 'drill', label: '强化钻头', desc: '采矿效率 ×1.3', points: 130, items: { parts: 2 }, mineRateMult: 1.3 },
+];
+
+export const SHUTTLE_MAINT = {
+  autoRepairBelow: 45, // 耐久低于此值时，列车承担例行维修
+  repairPerPart: 30,
+  slowBelow: 50, // 耐久低于此值速度 ×0.85
+  groundedBelow: 15, // 耐久低于此值禁止出勤
+};
+
+export const RAW_BASE_PRICE: Record<RawId, number> = {
+  iron: 2,
+  copper: 3,
+  ice: 1,
+  crystal: 4,
+  bio: 10,
+};
+
+export const DEMAND_BONUS = { min: 0, max: 10, step: 1 };
+
+export const SURVIVAL = {
+  foodPerPersonHour: 0.05,
+  oxygenPerPersonHour: 1.0,
+  foodPerLogisticsEffHour: 0.42,
+  lifeSupportOxygenHour: 26, // 满效率时生命维持产氧
+  lifeSupportEnergyHour: 10,
+  reactorEnergyHour: 62,
+  baseEnergyHour: 22,
+  processingEnergyHour: 18,
+  researchEnergyHour: 5,
+  medicalEnergyHour: 3,
+  robotEnergyHour: 1.5,
+  robotPatrolExtra: 1.5,
+  energyCap: 1000,
+  oxygenCap: 1200,
+  rationMult: { lean: 0.75, normal: 1, rich: 1.25 },
+  fatigueHour: { light: -5, normal: -2, overtime: 3 }, // 列车上工作人员每小时疲劳变化
+  workloadMult: { light: 0.8, normal: 1, overtime: 1.3 },
+  fieldFatigueHour: 5,
+  restFatigueHour: -12,
+  healHour: 3,
+  medicalSkillThreshold: 40, // 医疗岗位技能门槛
+  starvingHealthHour: -2,
+  suffocatingHealthHour: -8,
+  exhaustedHealthHour: -1,
+  healthFloor: 5, // 首版不出现死亡，最低为危重
+};
+
+export const MOOD = {
+  baseMorale: 62,
+  baseDisappointment: 18,
+  moveRate: 4, // 每小时向目标移动量
+  hostilityFromDisappointment: 0.06, // (失望-60)*此值 每小时
+  hostilityThreshold: 60,
+  hostilityDecayBelow: 30,
+  hostilityDecayHour: 0.25,
+  leftBehindHostility: 30,
+};
+
+export const ROBOTS = {
+  count: 4,
+  deterrencePer: 10,
+};
+
+export const CATASTROPHE = {
+  trueArrival: 900, // 真实到达（游戏分钟，自开局）
+  biasRange: 60, // 预测中心偏差
+  minUncertainty: 20,
+  uncertaintyFrac: 0.22,
+  warnAt: 300, // 预测最早到达小于此值：逼近预警
+  edgeAt: 120, // 预测最早到达小于此值：危险边缘（首次自动暂停）
+  hullDamagePerMin: 0.6,
+  outsideHealthPerMin: 0.8,
+  shuttleWearPerMin: 1.5,
+  chasePerMinTravel: 0.02, // 离站后追赶进度每分钟增长（%）
+};
+
+export const TRAIN = {
+  driveRepairParts: 8,
+  driveRepairTime: 60,
+  fuelForDeparture: 10,
+  travelDuration: 240,
+  scanTime: 20,
+  scanEnergy: 40,
+  startHull: 82,
+};
+
+export const RESEARCH_RATE = 2.2; // 每有效研究员每小时研究点
+
+export const GENE = {
+  id: 'miningAdapt1',
+  label: '采掘适应序列·一阶',
+  desc: '采掘技能 +20，疲劳积累 -20%',
+  points: 90,
+  items: { bio: 1, energy: 15 } as Partial<Record<ItemId, number>>,
+  minCompatibility: 50,
+  minHealth: 60,
+  maxFatigue: 70,
+  loadLimit: 1, // 本阶段每人可承载序列数
+  recovery: 150,
+  miningBonus: 20,
+  requiresResearch: 'geneMining',
+};
+
+export const STATION = {
+  name: '回声交易站',
+  dockingFee: 15,
+  hourlyFee: 1,
+  hullRepairPrice: 0.5, // 每点
+  shuttleRepairPrice: 0.3,
+  sell: { iron: 0.5, copper: 0.8, ice: 0.3, crystal: 1.2, bio: 3, parts: 6, trainFuel: 7, propellant: 0.4 } as Partial<Record<ItemId, number>>,
+  buy: { food: 1, oxygen: 0.08, parts: 9, trainFuel: 12, propellant: 1 } as Partial<Record<ItemId, number>>,
+};
+
+export const START = {
+  credits: 40,
+  inventory: {
+    iron: 0,
+    copper: 0,
+    ice: 0,
+    crystal: 0,
+    bio: 0,
+    parts: 2,
+    trainFuel: 0,
+    propellant: 70,
+    food: 110,
+    oxygen: 700,
+    energy: 520,
+  } as Record<ItemId, number>,
+};
