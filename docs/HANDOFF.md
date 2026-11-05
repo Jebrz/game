@@ -18,7 +18,7 @@
 ## 2. 线上部署（实际核对结果）
 
 - 本轮基线（召回与离站燃料判断开始时）：远端与本地都在 `d54acfb`，工作区干净；线上星空列车 `assets/index-DmjkEwB8.js`（来自 `1e63648`）、地下城 `assets/index-1VxXLNq2.js`。
-- 本次提交的部署结果：推送后补记（见下一行）。
+- 本次 `b2fbfd5` 部署（运行 41977326574）：build / deploy / verify 均成功；线上星空列车 `assets/index-Xi1G29-J.js`（与本地 `dist/index.html` 及界面验证所用构建一致），地下城仍为 `assets/index-1VxXLNq2.js`，部署前逐字节核对通过。
 - 本次 `1e63648` 部署（运行 41969501821）：build / deploy / verify 均成功。线上星空列车脚本 `assets/index-DmjkEwB8.js`（样式 `index-CTvnouhD.css`），与本地 `dist/index.html` 一致，也是本轮界面验证所用构建；地下城仍为 `assets/index-1VxXLNq2.js`，部署前逐字节核对通过。之后只改文档的提交不改变脚本文件名。
 - 说明：本会话容器的代理拒绝直接访问 jebrz.github.io（403），线上核对以工作流 verify 日志为准。
 - `72eee48` 的部署在「类型检查 + 测试」步骤失败，未发布（预期行为：保护检查生效）。
