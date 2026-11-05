@@ -1,0 +1,30 @@
+{
+  "shuttle": {
+    "size": [
+      838,
+      722
+    ],
+    "cropOffsetInSource": [
+      269,
+      23
+    ],
+    "opaqueBBox": [
+      2,
+      2,
+      835,
+      719
+    ],
+    "nose": "up"
+  },
+  "hangar": {
+    "size": [
+      1376,
+      768
+    ],
+    "removedBackgroundRGB": [
+      94,
+      94,
+      94
+    ]
+  }
+}
