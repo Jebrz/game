@@ -1,7 +1,7 @@
 // 小组自主行动状态机
 // 每个状态一个处理函数；决策（选择目标）与执行分离。
 
-import { GROUPS, RELATION, SHUTTLE_MAINT, SHUTTLE_MODELS } from '../config/balance';
+import { GROUPS, RELATION, TERRITORY_SURVEY, SHUTTLE_MAINT, SHUTTLE_MODELS } from '../config/balance';
 import { EVENTS, ITEM_INFO } from '../config/content';
 import { estimate, stage } from './catastrophe';
 import { findDeposit, freeSlots, heldSlot, releaseAllOf, reserveForDelivery, tryClaim, release } from './claims';
@@ -231,16 +231,18 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
       rejected.push(`${sign.label}位于${P.natives.name}禁区`);
       continue;
     }
+    const terr = inFriendlyTerritory(s, sign);
+    const tag = terr ? `${P.natives.name}领地内的${sign.label}` : sign.label;
     const d = dist(ox, oy, sign.x, sign.y);
     const back = dist(sign.x, sign.y, P.trainX, P.trainY);
     const et = exploreTime(s, g, sh);
     const t = (d + back) / spd + et;
     if (!fuelOk(sign.x, sign.y, et)) {
-      rejected.push(`${sign.label}航程超出油量`);
+      rejected.push(`${tag}航程超出油量`);
       continue;
     }
     if (t > timeLimit) {
-      rejected.push(`${sign.label}往返 ${fmtTime(t)} 超过灾变安全时限`);
+      rejected.push(`${tag}往返 ${fmtTime(t)} 超过灾变安全时限`);
       continue;
     }
     const notes: string[] = [];
@@ -249,7 +251,18 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
       const label = ITEM_INFO[sign.guess].label;
       info = 30 + 15 * Math.min(5, unitPrice(s, sign.guess)); // 单价封顶，避免样本类迹象价值虚高
       const known = knownAvail(sign.guess);
-      if (known) {
+      if (terr) {
+        // 领地内迹象：调查不需要许可（开采才需要），确认结果能帮助列车长决定是否协商许可，
+        // 因此即使已有同类开放矿点也保留较高的信息价值
+        const N = P.natives;
+        info *= known ? TERRITORY_SURVEY.knownMult : TERRITORY_SURVEY.unknownMult;
+        notes.push(`${tag}：调查不需要许可，确认后列车长可决定是否协商采矿许可`);
+        if (N.contacted) {
+          info *= TERRITORY_SURVEY.contactedMult;
+          notes.push(`已与${N.name}建立联系，可以协商`);
+        }
+        if (known) notes.push(`已知${known.name}可采${label}，但领地内矿点的情报仍有决策价值`);
+      } else if (known) {
         info *= 0.35;
         notes.push(`已知${known.name}可采${label}，探索价值较低`);
       } else if (needs.has(sign.guess)) {
@@ -259,6 +272,12 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
     } else if (sign.kind === 'natives') {
       info = 90;
       notes.push('人工信号可能是原住民聚落');
+      // 领地内已确认矿点而尚未接触：只有先接触才能协商许可
+      const pending = P.deposits.find((d) => d.zone === 'permit' && d.discoveredBy != null && !activePermit(s, d));
+      if (pending && !P.natives.contacted) {
+        info *= TERRITORY_SURVEY.contactNeededMult;
+        notes.push(`已确认领地内的${pending.name}，需先与聚落接触才能协商采矿许可`);
+      }
     } else {
       info = 80;
       notes.push('异常信号可能有遗留物资');
@@ -340,6 +359,12 @@ function chooseTarget(s: GameState, g: Group, sh: Shuttle, ox: number, oy: numbe
   return best;
 }
 
+/** 迹象是否位于可交流原住民的领地内（禁区另行处理） */
+export function inFriendlyTerritory(s: GameState, sign: Sign): boolean {
+  const N = s.planet!.natives;
+  return N.kind === 'friendly' && N.detected && !sign.restricted && sign.kind === 'resource' && dist(sign.x, sign.y, N.x, N.y) <= N.r;
+}
+
 /** 列车当前短缺的原料及用途（维修零件 / 轨道燃料 / 推进剂） */
 function trainNeeds(s: GameState): Map<RawId, string> {
   const m = new Map<RawId, string>();
@@ -362,6 +387,8 @@ function explain(s: GameState, g: Group, sh: Shuttle, c: Choice, all: Choice[], 
     bits.push(...(c.notes ?? []));
     const mine = all.find((o) => o.kind === 'mine');
     if (mine) bits.push(`预期价值高于采集${mine.deposit!.name}`);
+    const terr = all.find((o) => o !== c && o.kind === 'explore' && inFriendlyTerritory(s, o.sign!));
+    if (terr) bits.push(`暂不调查${s.planet!.natives.name}领地内的${terr.sign!.label}（距离 ${fmt(terr.dist)} km，综合评分低于所选目标）`);
     if (sh.model === 'scout') bits.push('探索型运输机适合勘察');
     if (c.sign!.hazard > 0.12) bits.push(bold ? '组长进取，接受该区域风险' : '风险可控');
   } else {
@@ -370,6 +397,8 @@ function explain(s: GameState, g: Group, sh: Shuttle, c: Choice, all: Choice[], 
     bits.push(`前往${d.name}采集${ITEM_INFO[r].label}`);
     bits.push(...(c.notes ?? []));
     if (all.some((o) => o.kind === 'explore')) bits.push('已知矿点收益高于继续探索');
+    const terr = all.find((o) => o.kind === 'explore' && inFriendlyTerritory(s, o.sign!));
+    if (terr) bits.push(`暂不调查${s.planet!.natives.name}领地内的${terr.sign!.label}（采矿收益更高）`);
     if (s.demandBonus[r] > 0) bits.push(`响应列车需求奖励（${unitPrice(s, r)} 点/单位）`);
     if (r === 'ice' && s.inventory.propellant < PROPELLANT_ALERT) bits.push('列车推进剂告急，关系本组能否出勤，优先采冰晶');
     const richer = all.find((o) => o !== c && o.kind === 'mine' && o.deposit!.resource !== r && o.dist > c.dist + 8);

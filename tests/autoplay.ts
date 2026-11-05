@@ -6,12 +6,17 @@ import { stage } from '../src/sim/catastrophe';
 import { SHUTTLE_BUILD, TRAIN } from '../src/config/balance';
 import { canSwap } from '../src/sim/hangar';
 import { nextLegFuel, rawShortfall } from '../src/sim/objectives';
+import { enrollOrder } from '../src/sim/training';
 import type { GameState, RawId } from '../src/sim/types';
 
 export interface BotOpts {
   style?: 'expert' | 'novice';
   noBonus?: boolean; // 完全不调需求奖励的被动玩家
   buildShuttle?: boolean; // 在起始星球尝试制造运输机
+  keepSpare?: boolean; // 新造的公共运输机留作备用（供动态新组），不给现有小组换机
+  train?: boolean; // 起始星球安排一次采掘培训（按界面名单顺序选学员）
+  /** 覆盖离站判断：返回 true 时发出召回并前往下一站 */
+  leaveWhen?: (s: GameState) => boolean;
 }
 
 export function botInterval(o: BotOpts): number {
@@ -66,7 +71,11 @@ export function autoPlayer(s: GameState, opts: BotOpts = {}): void {
     if (opts.buildShuttle && s.journey.current === 0 && s.train.driveRepaired && stage(s) === 'far' && !A.canOrderShuttle(s, null).length) {
       if (!s.shuttles.some((x) => x.builtAt >= 0 && x.ownerGroupId == null)) A.captainOrderShuttle(s);
     }
-    for (const sp of s.shuttles.filter((x) => x.assignedTo === 'spare' && x.ownerGroupId == null)) {
+    if (opts.train && s.journey.current === 0 && !s.training.enrollments.length && !s.passengers.some((p) => p.coursesDone.includes('miningBasic'))) {
+      const cands = enrollOrder(s, 'miningBasic').map((x) => x.p);
+      if (cands[0]) A.enroll(s, cands[0].id, 'miningBasic');
+    }
+    for (const sp of opts.keepSpare ? [] : s.shuttles.filter((x) => x.assignedTo === 'spare' && x.ownerGroupId == null)) {
       const g = [...s.groups].sort((a, b) => (s.shuttles.find((x) => x.id === a.shuttleId)?.durability ?? 0) - (s.shuttles.find((x) => x.id === b.shuttleId)?.durability ?? 0))[0];
       if (g && !canSwap(s, g, sp, 'captain')) A.captainSwap(s, g.id, sp.id);
       else if (g && !A.canScheduleSwap(s, g, sp)) A.captainScheduleSwap(s, g.id, sp.id);
@@ -86,7 +95,7 @@ export function autoPlayer(s: GameState, opts: BotOpts = {}): void {
     // 离站：逼近预警（或燃料与目标完成后）时召回，然后前往下一站（expert 会跳过已知无矿的星球）
     const st = stage(s);
     const ready = s.train.driveRepaired && s.inventory.trainFuel >= need;
-    const leave = st === 'edge' || st === 'impact' || (ready && st === 'warn');
+    const leave = opts.leaveWhen ? opts.leaveWhen(s) : st === 'edge' || st === 'impact' || (ready && st === 'warn');
     if (leave) A.setRecall(s, true);
     if (s.recallActive) {
       let dest = s.journey.current + 1;

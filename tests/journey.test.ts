@@ -39,7 +39,7 @@ function play(seed: number, o: BotOpts, until: (s: GameState) => boolean = () =>
 }
 
 describe('灾变：由慢到快', () => {
-  it('推进速度单调加快；起始星球有足够时间（约 1600 分钟后才抵达）', () => {
+  it('推进速度单调加快；起始星球有足够时间（约 1800 分钟后才抵达）', () => {
     let last = 0;
     for (let t = 0; t <= 3000; t += 50) {
       const v = frontSpeed(t);
@@ -50,7 +50,7 @@ describe('灾变：由慢到快', () => {
     const s = started();
     const eta = estimate(s).remaining;
     expect(eta).toBeGreaterThan(1500);
-    expect(eta).toBeLessThan(1800);
+    expect(eta).toBeLessThan(1850);
   });
 
   it('预计到达平滑变化，无跳变；暂停不推进', () => {

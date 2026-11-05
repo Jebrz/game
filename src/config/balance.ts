@@ -163,10 +163,12 @@ export const ROBOTS = {
 // 灾变「灰烬潮」：前锋沿航线追赶列车。推进速度由慢到快（平滑加速，不会突然跳变）。
 // 速度 v(t) = v0 + (v1 - v0) * smoothstep(t / rampMinutes)，单位 Mm/分钟；列车航速固定且始终快于前锋。
 export const CATASTROPHE = {
-  startGap: 950, // 开局时前锋落后起始星球的里程（Mm）；按此曲线约第 1640 分钟抵达起始星球
-  v0: 0.3, // 初速（Mm/分钟）
-  v1: 1.2, // 加速完成后的速度
-  rampMinutes: 2400, // 从 v0 平滑加速到 v1 所需游戏分钟
+  startGap: 950, // 开局时前锋落后起始星球的里程（Mm）；按此曲线约第 1800 分钟抵达起始星球
+  v0: 0.28, // 初速（Mm/分钟）
+  // 前期推进放缓（初速 0.3→0.28、加速期 2400→3600 分），峰值提高（1.2→1.6）：
+  // 首站做完培训/造船后第二站仍有调查时间；后段两星之间的追赶间隔比调整前更紧
+  v1: 1.6, // 加速完成后的速度（仍远低于列车航速 3）
+  rampMinutes: 3600, // 从 v0 平滑加速到 v1 所需游戏分钟
   milestones: [0.35, 0.65, 0.9], // 加速进度提示点（占加速过程的比例）
   biasRange: 0.12, // 预测偏差（占剩余时间比例，随接近缩小）
   minUncertainty: 20,
@@ -282,6 +284,10 @@ export const PERMIT = {
   shareCap: 200,
   cooperative: { payFoodMult: 0.5, sharePct: 0.2 }, // 合作关系的优惠
 };
+
+// 原住民领地内迹象的调查价值（调查不需要许可，开采需要）：已知同类开放矿点时不再降到 0.35
+// contactNeededMult：领地内已确认矿点、尚未接触时，聚落信号（接触途径）的价值倍率
+export const TERRITORY_SURVEY = { knownMult: 0.9, unknownMult: 1.1, contactedMult: 1.3, contactNeededMult: 2 };
 
 export const RELATION = {
   cooperativeAt: 30,

@@ -14,7 +14,7 @@
 import { COURSES, FIELD_MIN_AGE, QUAL_SKILL, QUAL_THRESHOLD, TRAINING, type CourseDef } from '../config/balance';
 import { PROFESSION_INFO } from '../config/content';
 import { add, consume, costText, fmt, log, missingItems, newId } from './core';
-import { canRefill, isHome, releaseMember, reservedForTrain } from './groups';
+import { canRefill, checkNewGroup, isHome, releaseMember, reservedForTrain, type FormationCheck } from './groups';
 import { insertJob, materialBlocks, QUEUE_MAX } from './hangar';
 import type { Enrollment, GameState, Passenger, Profession } from './types';
 
@@ -153,6 +153,32 @@ export function canEnroll(s: GameState, p: Passenger, courseId: string): string[
     if (miss.length) r.push(`材料不足：${miss.join('、')}`);
   }
   return r;
+}
+
+/**
+ * 名额提示：一人只占一个名额。已在小组担任其他职业的人、或已被新组计入其他名额的人，
+ * 培训后不会增加新组人手（返回提示文字；空字符串 = 无此问题）。
+ */
+export function slotNote(s: GameState, p: Passenger, courseId: string, fc: FormationCheck = checkNewGroup(s)): string {
+  const c = course(courseId);
+  if (p.groupId != null) {
+    const g = s.groups.find((x) => x.id === p.groupId);
+    const role = g?.memberRoles[p.id] ?? p.profession;
+    if (g && role !== c.prof) return `已是${g.name}${PROFESSION_INFO[role].label}；一人只占一个名额，培训后不增加新组人手`;
+  }
+  const r = fc.roles.get(p.id);
+  if (r && r !== c.prof) return `新组已计入其为${PROFESSION_INFO[r].label}；一人只占一个名额，培训后不增加新组人手`;
+  return '';
+}
+
+/** 可报名者，按界面顺序：没有名额问题的排前，其次技能高者 */
+export function enrollOrder(s: GameState, courseId: string): { p: Passenger; note: string }[] {
+  const c = course(courseId);
+  const fc = checkNewGroup(s);
+  return s.passengers
+    .filter((p) => !p.isCaptain && !p.leftBehind && !canEnroll(s, p, courseId).length)
+    .map((p) => ({ p, note: slotNote(s, p, courseId, fc) }))
+    .sort((a, b) => (a.note ? 1 : 0) - (b.note ? 1 : 0) || skillOfCourse(b.p, c) - skillOfCourse(a.p, c));
 }
 
 export function enroll(s: GameState, p: Passenger, courseId: string): Enrollment | null {

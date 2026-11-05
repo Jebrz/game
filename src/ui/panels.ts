@@ -7,7 +7,7 @@ import * as A from '../sim/actions';
 import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
 import { mineralStatus, nextLegFuel } from '../sim/objectives';
 import { checkNewGroup } from '../sim/groups';
-import { canEnroll, canExpandTraining, cancelText, course, enrollmentOf, isMentoring, isTraining, mentorLoad, mentorsAway, mentorsFor, nextTrainingExpansion, seatsUsed, skillOfCourse, waitingMentor } from '../sim/training';
+import { canEnroll, canExpandTraining, cancelText, course, enrollOrder, enrollmentOf, isMentoring, isTraining, mentorLoad, mentorsAway, mentorsFor, nextTrainingExpansion, seatsUsed, skillOfCourse, waitingMentor } from '../sim/training';
 import { activePermit, ATTITUDE_LABEL, attitude, depositAccess, hasTranslation, permitTerms, tradeText } from '../sim/natives';
 import { DEFER_TEXT, eventOptions, optionSummary } from '../sim/events';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
@@ -432,6 +432,11 @@ function recallPanel(s: GameState): string {
     const evs = s.events.filter((e) => e.nodeIndex === s.journey.current && (e.status === 'active' || e.status === 'assigned'));
     if (evs.length) h += `<tr><td colspan="5" class="note">执行中的事件：${evs.map((e) => `${esc(e.title)}（${EV_STATUS[e.status]}，剩余 ${fmtTime(e.remaining)}）`).join('；')}。召回会中断作业：进度保留，已投入不退；离站则作废。</td></tr>`;
     h += `</table><div>${outside ? `<span class="badtext">尚有 ${outside} 人未返回</span>` : '<span class="ok">所有人员都在列车上</span>'}</div>`;
+    if (st !== 'impact') {
+      const maxEta = Math.max(0, ...s.groups.map((g) => recallInfo(s, g).eta ?? 0));
+      const slack = e.low - maxEta;
+      h += `<div class="${slack < 60 ? 'badtext' : 'note'}">现在召回：全员最晚约 ${fmtTime(maxEta)} 后回到列车（不含卸货）；按最早到达估计，最晚还可再等约 ${fmtTime(Math.max(0, slack))} 再发出召回${slack < 60 ? '——余量已不多' : ''}。之后小组出勤得越远，召回耗时越长。</div>`;
+    }
     h += `<h4>作业位置保留</h4><div class="note">返航交货期间保留 ${SLOT_RESERVE_MINUTES} 分钟，过期释放。</div>`;
     const held = (s.planet?.deposits ?? []).flatMap((d) => d.slots.filter((x) => x.status !== 'free').map((x) => ({ d, x })));
     h += held.length
@@ -444,6 +449,15 @@ function recallPanel(s: GameState): string {
 }
 
 
+
+/** 离站时未完成事件会损失什么 */
+function expireText(e: GameState['events'][number]): string {
+  const parts = [EV_STATUS[e.status]];
+  if (e.status !== 'pending') parts.push(`剩余作业 ${fmtTime(e.remaining)}`);
+  if (Object.keys(e.paid ?? {}).length) parts.push(`已投入 ${costText(e.paid)} 不退`);
+  parts.push('奖励不会发放');
+  return `${e.title}（${parts.join('，')}）`;
+}
 
 const EV_STATUS: Record<string, string> = { pending: '待决定', assigned: '待执行', active: '作业中', done: '已完成', declined: '已放弃/拒绝', expired: '已作废' };
 
@@ -591,14 +605,7 @@ function trainingPanel(s: GameState): string {
   for (const c of COURSES) {
     const ms = mentorsFor(s, c);
     const cands = s.passengers.filter((p) => !p.isCaptain && !p.leftBehind);
-    // 已被新组计入其他名额的人（一人只占一个名额）：培训后不会增加新组人手，排在后面并提示
-    const otherSlot = (p: Passenger) => {
-      const r = fc.roles.get(p.id);
-      return r && r !== c.prof ? r : null;
-    };
-    const ok = cands
-      .filter((p) => !canEnroll(s, p, c.id).length)
-      .sort((a, b) => (otherSlot(a) ? 1 : 0) - (otherSlot(b) ? 1 : 0) || skillOfCourse(b, c) - skillOfCourse(a, c));
+    const ok = enrollOrder(s, c.id);
     const reasonsCount = new Map<string, number>();
     for (const p of cands) {
       const r = canEnroll(s, p, c.id);
@@ -619,9 +626,8 @@ function trainingPanel(s: GameState): string {
     if (ok.length) {
       h += `<table><tr><th>可报名</th><th>背景/当前</th><th class="num">技能</th><th>说明</th><th></th></tr>${ok
         .slice(0, 6)
-        .map((p) => {
-          const o = otherSlot(p);
-          const tip = o ? `<span class="why">新组已计入其为${PROFESSION_INFO[o].label}；一人只占一个名额，培训后不增加新组人手</span>` : '';
+        .map(({ p, note }) => {
+          const tip = note ? `<span class="why">${esc(note)}</span>` : '';
           return `<tr><td>${esc(p.name)}</td><td>${PROFESSION_INFO[p.profession].label} / ${esc(currentPost(s, p))}</td><td class="num">${fmt(skillOfCourse(p, c))}</td><td>${tip}</td><td>${sbtn(ms.available.length ? '安排' : '报名（等待导师）', 'enroll', `${p.id}:${c.id}`)}</td></tr>`;
         })
         .join('')}</table>`;
@@ -686,6 +692,9 @@ function routePanel(s: GameState): string {
       if (o.skips.length) h += `<div class="why">跳过：${esc(o.skips.join('、'))}</div>`;
       h += `<div>预计 ${clockText(o.predict.arriveAt)} 到达；届时灰烬潮预计 <b>${fmtTime(o.predict.low)} ～ ${fmtTime(o.predict.high)}</b> 后抵达该处。${o.node.kind === 'station' ? '（交易站内灾变追赶暂停）' : risk}</div>`;
       h += `<div>燃料：有 ${fmt(s.inventory.trainFuel)}，需 ${o.fuel}${s.inventory.trainFuel < o.fuel ? `，<span class="badtext">缺 ${fmt(o.fuel - s.inventory.trainFuel)}</span>` : `，到达后剩 ${fmt(s.inventory.trainFuel - o.fuel)}`}</div>`;
+      const unfinished = s.events.filter((e) => e.nodeIndex === s.journey.current && ['pending', 'assigned', 'active'].includes(e.status));
+      if (unfinished.length)
+        h += `<div class="why">离站将作废未完成的事件：${unfinished.map((e) => esc(expireText(e))).join('；')}</div>`;
       h += `<div class="row">${sbtn(`离站前往${o.node.name}`, 'departTo', o.index, o.block, 'primary')}${o.block ? `<span class="why">${esc(o.block)}</span>` : ''}</div>`;
       const fw = A.canDepartTo(s, o.index, true);
       if (!fw) h += `<div class="row">${sbtn('强行离站（遗留未归人员）', 'forceDepartAsk', o.index, '', 'danger')}<span class="note">严重行为：会遗留人员与运输机，全体敌意大增</span></div>`;
