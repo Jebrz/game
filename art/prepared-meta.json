@@ -1,0 +1,44 @@
+{
+  "engineering-car": {
+    "size": [
+      862,
+      407
+    ],
+    "cropOffset": [
+      33,
+      352
+    ]
+  },
+  "shuttle-docked": {
+    "size": [
+      369,
+      185
+    ],
+    "cropOffset": [
+      75,
+      86
+    ],
+    "opaqueBBox": [
+      2,
+      3,
+      365,
+      181
+    ]
+  },
+  "miner": {
+    "size": [
+      198,
+      692
+    ],
+    "cropOffset": [
+      586,
+      46
+    ],
+    "opaqueBBox": [
+      3,
+      2,
+      194,
+      688
+    ]
+  }
+}
