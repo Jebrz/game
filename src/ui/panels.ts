@@ -5,7 +5,7 @@ import { canExpandHangar, canOrderShuttle, hangarUsage, itemListText, jobLabel, 
 import { CARS, DEPT_INFO, FUTURE_SEQUENCES, HEAD_INFO, ITEM_INFO, PROFESSION_INFO, RAW_IDS, RECIPES, RESEARCH } from '../config/content';
 import * as A from '../sim/actions';
 import { accelInfo, estimate, gapToTrain, stage, STAGE_LABEL } from '../sim/catastrophe';
-import { mineralStatus, nextLegFuel } from '../sim/objectives';
+import { fuelPlan, mineralStatus, nextLegFuel } from '../sim/objectives';
 import { checkNewGroup } from '../sim/groups';
 import { canEnroll, canExpandTraining, cancelText, course, enrollOrder, enrollmentOf, isMentoring, isTraining, mentorLoad, mentorsAway, mentorsFor, nextTrainingExpansion, seatsUsed, skillOfCourse, waitingMentor } from '../sim/training';
 import { activePermit, ATTITUDE_LABEL, attitude, depositAccess, hasTranslation, permitTerms, tradeText } from '../sim/natives';
@@ -13,7 +13,7 @@ import { DEFER_TEXT, eventOptions, optionSummary } from '../sim/events';
 import { SLOT_RESERVE_MINUTES } from '../sim/claims';
 import { clockText, costText, fmt, fmtTime, groupShuttle, members } from '../sim/core';
 import { geneEligibility, geneTrainBlock, purchaseOptions, unitPrice } from '../sim/economy';
-import { recallInfo } from '../sim/groupAI';
+import { recallInfo, sortieOutlook, sortieOutlooks } from '../sim/groupAI';
 import { leaderPersonality } from '../sim/groups';
 import { cargoCap, cargoUsed, fuelPerKm, speed, tank } from '../sim/shuttles';
 import { deptStats, processingSpeed } from '../sim/staff';
@@ -266,6 +266,14 @@ function shuttlesPanel(s: GameState): string {
 }
 
 // ---------------- 库存与加工 ----------------
+function trainFuelNote(s: GameState): string {
+  const plan = fuelPlan(s, (g) => returnEta(s, g), processingSpeed(s));
+  if (!plan || plan.verdict === 'enough') return '';
+  const gap = Math.max(0, plan.need - plan.have - plan.queued);
+  if (!gap) return `<div class="ok">下一站 ${esc(plan.dest)} 需 ${plan.need}：已入库 ${fmt(plan.have)} + 队列中 ${plan.queued}，够用。</div>`;
+  return `<div class="why">下一站 ${esc(plan.dest)} 需 ${plan.need}：已入库 ${fmt(plan.have)}、队列中 ${plan.queued}，还要加入 ${gap} 单位${plan.makeable < gap ? `（现有原料只够 ${plan.makeable} 单位）` : ''}。</div>`;
+}
+
 function industryPanel(s: GameState): string {
   let h = `<h3>列车库存</h3><table><tr><th>物品</th><th class="num">数量</th><th>用途</th></tr>`;
   for (const k of Object.keys(ITEM_INFO) as ItemId[]) {
@@ -281,7 +289,7 @@ function industryPanel(s: GameState): string {
       .map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`)
       .join(' + ')} → ${Object.entries(out)
       .map(([k, v]) => `${ITEM_INFO[k as ItemId].label} ${v}`)
-      .join(' + ')}</div><div class="row">${sbtn('加入 ×1', 'enqueue', `${r.id}:1`, r1)}${sbtn('加入 ×5', 'enqueue', `${r.id}:5`, r5)}${r1 ? `<span class="why">${esc(r1)}</span>` : ''}</div></div>`;
+      .join(' + ')}</div>${r.id === 'trainFuel' ? trainFuelNote(s) : ''}<div class="row">${sbtn('加入 ×1', 'enqueue', `${r.id}:1`, r1)}${sbtn('加入 ×5', 'enqueue', `${r.id}:5`, r5)}${r1 ? `<span class="why">${esc(r1)}</span>` : ''}</div></div>`;
   }
   h += queueHtml(s);
   return h;
@@ -409,6 +417,75 @@ function moodPanel(s: GameState): string {
 }
 
 // ---------------- 灾变与召回 ----------------
+/** 召回按钮旁的离站判断：下一段燃料、车上原料能否补、要等哪个小组回货、仍缺时按当前规则能做什么 */
+/** 回到列车并卸完货的预计分钟：卸货中的小组按剩余卸货时间 */
+function returnEta(s: GameState, g: GameState['groups'][number]): number {
+  return g.state === 'unloading' ? Math.max(0, g.timer) : recallInfo(s, g).eta ?? 0;
+}
+
+export function departureAdvice(s: GameState, catLow: number): string {
+  const plan = fuelPlan(s, (g) => returnEta(s, g), processingSpeed(s));
+  if (!plan) return '';
+  const maxEta = Math.max(0, ...s.groups.map((g) => returnEta(s, g)));
+  const raw = (c: number, i: number) => [c > 0 ? `辉晶 ${fmt(c)}` : '', i > 0 ? `冰晶 ${fmt(i)}` : ''].filter(Boolean).join('、') || '无';
+  let h = `<div class="card" id="fuel-advice"><div class="head"><b>离站燃料判断（下一站 ${esc(plan.dest)}）</b><span>需 ${plan.need} · 已入库 ${fmt(plan.have)}</span></div>`;
+  const lines: string[] = [];
+  let cls = 'ok';
+  if (plan.verdict === 'enough') lines.push(`燃料已够。全员回车后即可在「航线」面板离站。`);
+  else {
+    if (plan.queued) lines.push(`生产队列中有轨道燃料 ${plan.queued} 单位（原料已扣），约 ${fmtTime(plan.queuedDoneIn)} 后加工完；召回不会中断加工。`);
+    if (plan.verdict === 'processing') lines.push(`加工完成后燃料够用。`);
+    if (plan.makeable > 0)
+      lines.push(`${plan.verdict === 'process' ? '缺口' : '其中'} ${plan.makeable} 单位可用已入库原料补上（库存辉晶 ${fmt(plan.stock.crystal)}、冰晶 ${fmt(plan.stock.ice)}；每单位辉晶 3 + 冰晶 1），<b>需要先在「库存加工」加入队列</b>，加入后约 ${fmtTime(plan.makeMinutes)} 完成。`);
+    if (plan.verdict === 'cargo' || (plan.verdict === 'short' && plan.inbound.length)) {
+      cls = 'why';
+      for (const b of plan.inbound)
+        lines.push(`${esc(b.group)}运输机上已装 ${[raw(b.crystal, b.ice) === '无' ? '' : raw(b.crystal, b.ice), b.fuel ? `遗留轨道燃料 ${fmt(b.fuel)}` : ''].filter(Boolean).join('、')}（<b>预计带回，未入库</b>；${b.returning ? '已在返航' : '召回后立即返航，不再继续开采'}），约 ${fmtTime(b.eta)} 后回到列车并卸完货。`);
+      if (plan.fromCargo > 0) lines.push(`这些货回车后可再得轨道燃料 ${plan.fromCargo} 单位（遗留燃料直接入库；辉晶、冰晶卸货后还需加工）。`);
+    }
+    if (plan.verdict === 'short') {
+      cls = 'badtext';
+      lines.push(`车上原料加上预计带回的货仍缺轨道燃料 ${plan.short} 单位（约还需开采 ${raw(plan.shortRaw.crystal, plan.shortRaw.ice)}）。燃料不足时无法离站；强行离站只会遗留未归人员，不能补燃料。`);
+      const opts: string[] = [];
+      const st = stage(s);
+      if (st === 'edge' || st === 'impact') opts.push(s.recallActive ? '已到危险边缘：即使解除召回，小组也不再出勤' : '已到危险边缘：在列车上的小组不再出勤');
+      else {
+        // 逐组核实：解除召回（或不召回）后是否真的会去采辉晶/冰晶
+        const om = sortieOutlooks(s);
+        const looks = s.groups.filter((g) => g.memberIds.length).map((g) => ({ g, why: om.get(g.id) ?? '' }));
+        const ok = looks.filter((x) => !x.why).map((x) => x.g.name);
+        const no = looks.filter((x) => x.why).map((x) => `${x.g.name}（${x.why}）`);
+        const lead = s.recallActive ? '解除召回令' : '暂不召回';
+        if (ok.length) opts.push(`${lead}，${esc(ok.join('、'))}${s.recallActive ? '会恢复' : '会继续'}自主出勤（「逼近」阶段只接灾变时限内的目标，到「危险边缘」后不再出勤）${no.length ? `；${esc(no.join('、'))}不会出勤` : ''}`);
+        else opts.push(`<b>即使${lead}，也没有小组会出勤</b>：${esc(no.join('、'))}`);
+        if (looks.some((x) => x.why.startsWith('推进剂不足')))
+          opts.push(`先补运输机推进剂：「库存加工」里有「运输机推进剂」（冰晶 3 → 6，现有冰晶 ${fmt(s.inventory.ice)}）和「应急合成推进剂」（能源 90 kWh → 6，现有能源 ${fmt(s.inventory.energy)}）`);
+      }
+      const edge = st === 'edge' || st === 'impact';
+      if (!edge) opts.push('在「奖励政策」提高辉晶/冰晶的需求奖励，引导小组选择相应矿点（小组自主决定）');
+      const N = s.planet?.natives;
+      const fuelTrade = N && N.kind === 'friendly' ? N.trades.find((x) => (x.get.trainFuel ?? 0) > 0 && x.stock > 0) : undefined;
+      if (fuelTrade) {
+        const w = A.canTrade(s, fuelTrade.id);
+        opts.push(`与${esc(N!.name)}以物易物：${esc(tradeText(fuelTrade))}（剩 ${fuelTrade.stock} 次，「航线」面板）${w ? `——目前不可用：${esc(w)}` : ''}`);
+      }
+      if (edge && !fuelTrade) opts.push('<b>按当前规则，本星已没有补足燃料的途径</b>');
+      lines.push(`按当前规则：${opts.join('；')}。风险：灰烬潮最早约 ${fmtTime(catLow)} 后抵达，抵达后车体每分钟受损、在外人员受伤，车体归零即失守。`);
+    } else if (cls === 'ok') cls = 'why';
+  }
+  // 时间对照（复用召回耗时与灾变最早估计）
+  const ready = plan.readyIn;
+  const doneAt = Math.max(maxEta, ready ?? 0);
+  lines.push(
+    `时间对照：灰烬潮最早约 ${fmtTime(catLow)} 后抵达；现在召回全员约 ${fmtTime(maxEta)} 后回车；${ready == null ? '燃料按现有原料凑不齐' : ready > 0 ? `燃料约 ${fmtTime(ready)} 后备齐` : '燃料已备齐'}${ready == null ? '' : `；余量约 ${fmtTime(Math.max(0, catLow - doneAt))}${catLow - doneAt < 60 ? '（很紧）' : ''}`}。`,
+  );
+  h += lines.map((l, i) => `<div class="${i === lines.length - 1 ? 'note' : cls}">${l}</div>`).join('');
+  if (plan.makeable > 0 || plan.fromCargo > 0) h += `<div class="row">${sbtn('前往库存加工（轨道燃料）', 'tab', 'industry', '', 'primary')}</div>`;
+  else if (plan.verdict === 'short' && s.groups.some((g) => sortieOutlook(s, g).startsWith('推进剂不足'))) h += `<div class="row">${sbtn('前往库存加工（推进剂）', 'tab', 'industry', '', 'primary')}</div>`;
+  h += `<div class="note">召回始终可以一键发出：燃料不足也可以先把人叫回来。</div></div>`;
+  return h;
+}
+
 function recallPanel(s: GameState): string {
   let h = `<h3>灾变：灰烬潮</h3>`;
   const acc = accelInfo(s);
@@ -420,6 +497,7 @@ function recallPanel(s: GameState): string {
     h += `<h4>${esc(s.planet?.name ?? '')}</h4><div>阶段：<b class="${st === 'far' ? '' : 'badtext'}">${STAGE_LABEL[st]}</b></div>`;
     h += st === 'impact' ? `<div class="badtext">灰烬潮已抵达！车体每分钟受损，必须立即离站。</div>` : `<div>预计到达本星：<b>${fmtTime(e.low)} ～ ${fmtTime(e.high)}</b> 后</div><div class="note">探测数据有不确定性，越接近越准确。最早时间进入 5 小时内为“逼近”，2 小时内为“危险边缘”（首次自动暂停）。</div>`;
     h += `<h3>紧急召回</h3>`;
+    if (st !== 'impact') h += departureAdvice(s, e.low);
     h += `<div class="row">${s.recallActive ? btn('解除召回令', 'recall', 'off') : btn('发出紧急召回令', 'recall', 'on', '', 'danger')}</div>`;
     h += `<div class="note">召回后所有小组立即返航（携带已采原料），在列车待命不再出勤。</div>`;
     let outside = 0;
@@ -435,7 +513,7 @@ function recallPanel(s: GameState): string {
     if (st !== 'impact') {
       const maxEta = Math.max(0, ...s.groups.map((g) => recallInfo(s, g).eta ?? 0));
       const slack = e.low - maxEta;
-      h += `<div class="${slack < 60 ? 'badtext' : 'note'}">现在召回：全员最晚约 ${fmtTime(maxEta)} 后回到列车（不含卸货）；按最早到达估计，最晚还可再等约 ${fmtTime(Math.max(0, slack))} 再发出召回${slack < 60 ? '——余量已不多' : ''}。之后小组出勤得越远，召回耗时越长。</div>`;
+      h += `<div class="${slack < 60 ? 'badtext' : 'note'}">现在召回：全员最晚约 ${fmtTime(maxEta)} 后回到列车（有货的小组含卸货）；按最早到达估计，最晚还可再等约 ${fmtTime(Math.max(0, slack))} 再发出召回${slack < 60 ? '——余量已不多' : ''}。之后小组出勤得越远，召回耗时越长。</div>`;
     }
     h += `<h4>作业位置保留</h4><div class="note">返航交货期间保留 ${SLOT_RESERVE_MINUTES} 分钟，过期释放。</div>`;
     const held = (s.planet?.deposits ?? []).flatMap((d) => d.slots.filter((x) => x.status !== 'free').map((x) => ({ d, x })));

@@ -107,3 +107,112 @@ function shortText(_s: GameState, m: Partial<Record<RawId, number>>): string {
   const e = Object.entries(m);
   return e.length ? ` · 还缺 ${e.map(([k, v]) => `${ITEM_INFO[k as RawId].label} ${fmt(v ?? 0)}`).join('、')}` : '';
 }
+
+// ---------------- 召回前后的离站燃料判断（只读推导，不改变状态） ----------------
+
+export interface CargoInbound {
+  groupId: number;
+  group: string;
+  crystal: number; // 扣除分享产出后、预计入库的辉晶（含遗留物资）
+  ice: number;
+  fuel: number; // 遗留物资中的轨道燃料（回车即入库）
+  eta: number; // 现在召回时预计回到列车并卸完货的分钟数（与召回面板同一算法）
+  state: string;
+  returning: boolean; // 已在返航（不会再继续开采）
+}
+
+export interface FuelPlan {
+  dest: string;
+  need: number;
+  have: number; // 已入库的轨道燃料
+  queued: number; // 生产队列中尚未完成的轨道燃料（原料已扣）
+  queuedDoneIn: number; // 队列中最后一份轨道燃料完成的预计分钟数
+  stock: { crystal: number; ice: number }; // 已入库原料
+  makeable: number; // 用已入库原料还能加工的单位数（不超过缺口）
+  makeMinutes: number; // 把这些加入队列后全部完成的预计分钟数
+  inbound: CargoInbound[]; // 外出小组已装上运输机、预计带回的原料
+  fromCargo: number; // 加上预计带回的货之后能多做的燃料单位
+  short: number; // 车上 + 预计带回仍不够的单位数
+  shortRaw: { crystal: number; ice: number }; // 对应还需开采的原料
+  readyIn: number | null; // 燃料凑齐的预计分钟数（null = 凑不齐）
+  verdict: 'enough' | 'processing' | 'process' | 'cargo' | 'short';
+}
+
+/** 下一站燃料：已有 / 队列中 / 车上原料可加工 / 外出小组预计带回 / 仍缺（按当前加工速度与召回耗时估计） */
+export function fuelPlan(s: GameState, groupEta: (g: GameState['groups'][number]) => number, speed: number): FuelPlan | null {
+  const j = s.journey;
+  if (s.phase !== 'planet' || j.current + 1 >= j.nodes.length) return null;
+  const need = nextLegFuel(s);
+  const recipe = RECIPES.find((r) => r.id === 'trainFuel')!;
+  const perC = recipe.inputs.crystal ?? 3;
+  const perI = recipe.inputs.ice ?? 1;
+  const unitTime = recipe.time;
+  const sp = Math.max(0.05, speed);
+  const have = s.inventory.trainFuel;
+  // 队列：公共订单在前；轨道燃料完成时刻 = 它之前（含）所有工时之和
+  let acc = 0;
+  let queued = 0;
+  let queuedDoneIn = 0;
+  let publicWork = 0;
+  for (const job of s.queue) {
+    acc += job.remaining;
+    if (job.orderedBy == null) publicWork = acc;
+    if (job.kind === 'recipe' && job.recipeId === 'trainFuel') {
+      queued += 1;
+      queuedDoneIn = acc / sp;
+    }
+  }
+  const gap0 = Math.max(0, need - have - queued);
+  const crystal = s.inventory.crystal;
+  const ice = s.inventory.ice;
+  const canMake = Math.floor(Math.min(crystal / perC, ice / perI));
+  const makeable = Math.min(gap0, canMake);
+  const makeMinutes = makeable > 0 ? (publicWork + makeable * unitTime) / sp : 0;
+  const inbound: CargoInbound[] = [];
+  for (const g of s.groups) {
+    if (g.state === 'docked' || g.state === 'resting' || g.state === 'grounded') continue;
+    const sh = s.shuttles.find((x) => x.id === g.shuttleId);
+    if (!sh) continue;
+    const owed = sh.cargo.owed ?? {};
+    const c = Math.max(0, (sh.cargo.items.crystal ?? 0) - (owed.crystal ?? 0)) + (g.loot.crystal ?? 0);
+    const i = Math.max(0, (sh.cargo.items.ice ?? 0) - (owed.ice ?? 0)) + (g.loot.ice ?? 0);
+    const f = g.loot.trainFuel ?? 0;
+    if (c <= 0 && i <= 0 && f <= 0) continue;
+    inbound.push({ groupId: g.id, group: g.name, crystal: c, ice: i, fuel: f, eta: groupEta(g), state: g.status, returning: g.state === 'returning' || g.state === 'unloading' });
+  }
+  inbound.sort((a, b) => a.eta - b.eta);
+  // 逐个加入预计带回的货，看何时凑齐
+  const gap1 = gap0 - makeable;
+  let fromCargo = 0;
+  let cc = crystal - makeable * perC;
+  let ii = ice - makeable * perI;
+  let readyIn: number | null = null;
+  let lastEta = 0;
+  let direct = 0; // 遗留燃料（无需加工）
+  for (const b of inbound) {
+    if (fromCargo >= gap1) break;
+    cc += b.crystal;
+    ii += b.ice;
+    direct += b.fuel;
+    lastEta = b.eta;
+    fromCargo = Math.min(gap1, direct + Math.floor(Math.min(cc / perC, ii / perI)));
+  }
+  const short = Math.max(0, gap1 - fromCargo);
+  const made = Math.max(0, fromCargo - direct); // 由带回原料加工的单位
+  const shortRaw = { crystal: Math.max(0, Math.ceil(short * perC - Math.max(0, cc - made * perC))), ice: Math.max(0, Math.ceil(short * perI - Math.max(0, ii - made * perI))) };
+  let verdict: FuelPlan['verdict'];
+  if (have >= need) {
+    verdict = 'enough';
+    readyIn = 0;
+  } else if (gap0 === 0) {
+    verdict = 'processing';
+    readyIn = queuedDoneIn;
+  } else if (gap1 === 0) {
+    verdict = 'process';
+    readyIn = makeMinutes;
+  } else if (short === 0) {
+    verdict = 'cargo';
+    readyIn = Math.max(lastEta, (publicWork + makeable * unitTime) / sp) + (Math.max(0, fromCargo - direct) * unitTime) / sp;
+  } else verdict = 'short';
+  return { dest: j.nodes[j.current + 1].name, need, have, queued, queuedDoneIn, stock: { crystal, ice }, makeable, makeMinutes, inbound, fromCargo, short, shortRaw, readyIn, verdict };
+}

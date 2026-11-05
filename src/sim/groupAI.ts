@@ -759,3 +759,70 @@ export function recallInfo(s: GameState, g: Group): { where: string; eta: number
 }
 
 export { isHome };
+
+/**
+ * 只读：解除召回后该组能否去采辉晶/冰晶（离站燃料原料）。返回空字符串 = 可以出勤；否则为具体原因。
+ * 与出勤判断使用同一套条件（灾变阶段、运输机、成员、耐久、推进剂往返最近的已知矿点），不改变状态。
+ */
+export function sortieOutlook(s: GameState, g: Group): string {
+  return sortieOutlooks(s).get(g.id) ?? '';
+}
+
+/** 各组出勤展望：列车推进剂按小组行动顺序共享（先出发的组先加满，与实际补给一致） */
+export function sortieOutlooks(s: GameState): Map<number, string> {
+  const m = new Map<number, string>();
+  let pool = s.inventory.propellant;
+  for (const g of s.groups) {
+    const r = outlookWith(s, g, pool);
+    m.set(g.id, r);
+    const sh = groupShuttle(s, g);
+    if (!r && sh && isHomeState(g)) pool -= Math.max(0, Math.min(tank(sh) - sh.fuel, pool));
+  }
+  return m;
+}
+
+function outlookWith(s: GameState, g: Group, pool: number): string {
+  if (s.phase !== 'planet' || !s.planet) return '不在星球';
+  const st = stage(s);
+  if (st === 'edge' || st === 'impact') return '已到危险边缘，不再出勤';
+  if (!isHomeState(g)) return '';
+  if (!g.memberIds.length) return '无成员';
+  const sh = groupShuttle(s, g);
+  if (!sh) return '没有可用的主运输机';
+  const block = blockAtTrain({ ...s, recallActive: false } as GameState, g, sh);
+  if (block) return block;
+  const P = s.planet;
+  // 目标：已知、可进入的辉晶/冰晶矿点，或尚未调查的辉晶/冰晶迹象（调查后才可能开采）。
+  // 燃料与时限按小组选目标时的同一算式：往返航程 + 作业期间待机耗油 + 安全余量；「逼近」时须在灾变安全时限内完成。
+  const spd = speed(sh);
+  const fpk = fuelPerKm(sh);
+  const free = cargoCap(sh) - cargoUsed(sh);
+  const bold = leaderPersonality(s, g) === 'bold';
+  const timeLimit = stage(s) === 'warn' ? estimate(s).low - (bold ? 15 : 45) : Infinity;
+  const targets: { name: string; x: number; y: number; work: number; tail: number }[] = [
+    ...P.deposits
+      .filter((d) => (d.resource === 'crystal' || d.resource === 'ice') && d.discoveredBy != null && d.reserve > 0 && !depositAccess(s, d))
+      .map((d) => ({ name: d.name, x: d.x, y: d.y, work: GROUPS.deployTime + Math.min(free, d.reserve) / Math.max(0.05, mineRate(s, g, sh, d.resource)), tail: GROUPS.unloadTime })),
+    ...P.signs
+      .filter((x) => x.revealed && !x.explored && !x.restricted && x.kind === 'resource' && (x.guess === 'crystal' || x.guess === 'ice'))
+      .map((x) => ({ name: `未调查的${x.label}`, x: x.x, y: x.y, work: exploreTime(s, g, sh), tail: 0 })),
+  ];
+  if (!targets.length) return '本星没有已知或待调查的辉晶/冰晶来源';
+  const fuelAvail = Math.min(tank(sh), sh.fuel + pool);
+  const rows = targets.map((d) => {
+    const leg = dist(P.trainX, P.trainY, d.x, d.y);
+    return { d, need: leg * 2 * fpk + d.work * IDLE_FUEL_PER_MIN + SAFETY_FUEL, time: (leg * 2) / spd + d.work + d.tail };
+  });
+  const inTime = rows.filter((r) => r.time <= timeLimit);
+  if (!inTime.length) {
+    const r = rows.sort((a, b) => a.time - b.time)[0];
+    return `往返${r.d.name}约 ${fmtTime(r.time)}，超过灾变安全时限`;
+  }
+  const near = inTime.sort((a, b) => a.need - b.need)[0];
+  if (fuelAvail < near.need) return `推进剂不足（可用 ${fmt(fuelAvail, 1)}，往返最近的${near.d.name}并作业约需 ${fmt(near.need, 1)}）`;
+  return '';
+}
+
+function isHomeState(g: Group): boolean {
+  return g.state === 'docked' || g.state === 'resting' || g.state === 'grounded';
+}
